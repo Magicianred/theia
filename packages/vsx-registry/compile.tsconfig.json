@@ -20,6 +20,9 @@
     },
     {
       "path": "../filesystem/compile.tsconfig.json"
+    },
+    {
+      "path": "../../dev-packages/ovsx-client/compile.tsconfig.json"
     }
   ]
 }
