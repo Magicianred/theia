@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -23,13 +23,14 @@
 import * as React from '@theia/core/shared/react';
 import { WidgetOpenerOptions, DISABLED_CLASS } from '@theia/core/lib/browser';
 import { EditorWidget, Range, Position } from '@theia/editor/lib/browser';
-import { DebugProtocol } from 'vscode-debugprotocol/lib/debugProtocol';
+import { DebugProtocol } from '@vscode/debugprotocol/lib/debugProtocol';
 import { TreeElement } from '@theia/core/lib/browser/source-tree';
 import { DebugScope } from '../console/debug-console-items';
 import { DebugSource } from './debug-source';
 import { RecursivePartial } from '@theia/core';
 import { DebugSession } from '../debug-session';
 import { DebugThread } from './debug-thread';
+import * as monaco from '@theia/monaco-editor-core';
 
 export class DebugStackFrameData {
     readonly raw: DebugProtocol.StackFrame;
@@ -63,26 +64,34 @@ export class DebugStackFrame extends DebugStackFrameData implements TreeElement 
         }));
     }
 
-    async open(options: WidgetOpenerOptions = {
-        mode: 'reveal'
-    }): Promise<EditorWidget | undefined> {
+    async open(options?: WidgetOpenerOptions): Promise<EditorWidget | undefined> {
         if (!this.source) {
             return undefined;
         }
         const { line, column, endLine, endColumn } = this.raw;
         const selection: RecursivePartial<Range> = {
-            start: Position.create(line - 1, column - 1)
+            start: Position.create(this.clampPositive(line - 1), this.clampPositive(column - 1))
         };
         if (typeof endLine === 'number') {
             selection.end = {
-                line: endLine - 1,
-                character: typeof endColumn === 'number' ? endColumn - 1 : undefined
+                line: this.clampPositive(endLine - 1),
+                character: typeof endColumn === 'number' ? this.clampPositive(endColumn - 1) : undefined
             };
         }
         this.source.open({
+            mode: 'reveal',
             ...options,
             selection
         });
+    }
+
+    /**
+     * Debugger can send `column: 0` value despite of initializing the debug session with `columnsStartAt1: true`.
+     * This method can be used to ensure that neither `column` nor `column` are negative numbers.
+     * See https://github.com/microsoft/vscode-mock-debug/issues/85.
+     */
+    protected clampPositive(value: number): number {
+        return Math.max(value, 0);
     }
 
     protected scopes: Promise<DebugScope[]> | undefined;

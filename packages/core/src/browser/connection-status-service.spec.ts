@@ -1,28 +1,25 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { enableJSDOM } from '../browser/test/jsdom';
 
 let disableJSDOM = enableJSDOM();
 
 import { FrontendApplicationConfigProvider } from './frontend-application-config-provider';
-import { ApplicationProps } from '@theia/application-package/lib/application-props';
-FrontendApplicationConfigProvider.set({
-    ...ApplicationProps.DEFAULT.frontend.config
-});
+FrontendApplicationConfigProvider.set({});
 
 import { expect } from 'chai';
 import {
@@ -36,8 +33,8 @@ import { MockConnectionStatusService } from './test/mock-connection-status-servi
 import * as sinon from 'sinon';
 
 import { Container } from 'inversify';
-import { WebSocketConnectionProvider } from './messaging/ws-connection-provider';
 import { ILogger, Emitter, Loggable } from '../common';
+import { WebSocketConnectionSource } from './messaging/ws-connection-source';
 
 disableJSDOM();
 
@@ -104,7 +101,7 @@ describe('frontend-connection-status', function (): void {
     let timer: sinon.SinonFakeTimers;
     let pingSpy: sinon.SinonSpy;
     beforeEach(() => {
-        const mockWebSocketConnectionProvider = sinon.createStubInstance(WebSocketConnectionProvider);
+        const mockWebSocketConnectionSource = sinon.createStubInstance(WebSocketConnectionSource);
         const mockPingService: PingService = <PingService>{
             ping(): Promise<void> {
                 return Promise.resolve(undefined);
@@ -121,11 +118,11 @@ describe('frontend-connection-status', function (): void {
         testContainer.bind(PingService).toConstantValue(mockPingService);
         testContainer.bind(ILogger).toConstantValue(mockILogger);
         testContainer.bind(ConnectionStatusOptions).toConstantValue({ offlineTimeout: OFFLINE_TIMEOUT });
-        testContainer.bind(WebSocketConnectionProvider).toConstantValue(mockWebSocketConnectionProvider);
+        testContainer.bind(WebSocketConnectionSource).toConstantValue(mockWebSocketConnectionSource);
 
-        sinon.stub(mockWebSocketConnectionProvider, 'onSocketDidOpen').value(mockSocketOpenedEmitter.event);
-        sinon.stub(mockWebSocketConnectionProvider, 'onSocketDidClose').value(mockSocketClosedEmitter.event);
-        sinon.stub(mockWebSocketConnectionProvider, 'onIncomingMessageActivity').value(mockIncomingMessageActivityEmitter.event);
+        sinon.stub(mockWebSocketConnectionSource, 'onSocketDidOpen').value(mockSocketOpenedEmitter.event);
+        sinon.stub(mockWebSocketConnectionSource, 'onSocketDidClose').value(mockSocketClosedEmitter.event);
+        sinon.stub(mockWebSocketConnectionSource, 'onIncomingMessageActivity').value(mockIncomingMessageActivityEmitter.event);
 
         timer = sinon.useFakeTimers();
 
@@ -174,7 +171,7 @@ describe('frontend-connection-status', function (): void {
         sinon.assert.calledOnce(pingSpy);
     });
 
-    it('should not perform ping request before desired timeout',  () => {
+    it('should not perform ping request before desired timeout', () => {
         const frontendConnectionStatusService = testContainer.get<FrontendConnectionStatusService>(FrontendConnectionStatusService);
         frontendConnectionStatusService['init']();
         mockIncomingMessageActivityEmitter.fire(undefined);

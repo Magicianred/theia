@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, named } from 'inversify';
 import { isOSX } from '../common/os';
@@ -27,6 +27,7 @@ import { StatusBarAlignment, StatusBar } from './status-bar/status-bar';
 import { ContextKeyService } from './context-key-service';
 import { CorePreferences } from './core-preferences';
 import * as common from '../common/keybinding';
+import { nls } from '../common/nls';
 
 export enum KeybindingScope {
     DEFAULT,
@@ -232,7 +233,7 @@ export class KeybindingRegistry {
         try {
             this.resolveKeybinding(binding);
             const scoped = Object.assign(binding, { scope });
-            this.keymaps[scope].unshift(scoped);
+            this.insertBindingIntoScope(scoped, scope);
             return Disposable.create(() => {
                 const index = this.keymaps[scope].indexOf(scoped);
                 if (index !== -1) {
@@ -242,6 +243,22 @@ export class KeybindingRegistry {
         } catch (error) {
             this.logger.warn(`Could not register keybinding:\n  ${common.Keybinding.stringify(binding)}\n${error}`);
             return Disposable.NULL;
+        }
+    }
+
+    /**
+     * Ensures that keybindings are inserted in order of increasing length of binding to ensure that if a
+     * user triggers a short keybinding (e.g. ctrl+k), the UI won't wait for a longer one (e.g. ctrl+k enter)
+     */
+    protected insertBindingIntoScope(item: common.Keybinding & { scope: KeybindingScope; }, scope: KeybindingScope): void {
+        const scopedKeymap = this.keymaps[scope];
+        const getNumberOfKeystrokes = (binding: common.Keybinding): number => (binding.keybinding.trim().match(/\s/g)?.length ?? 0) + 1;
+        const numberOfKeystrokesInBinding = getNumberOfKeystrokes(item);
+        const indexOfFirstItemWithEqualStrokes = scopedKeymap.findIndex(existingBinding => getNumberOfKeystrokes(existingBinding) === numberOfKeystrokesInBinding);
+        if (indexOfFirstItemWithEqualStrokes > -1) {
+            scopedKeymap.splice(indexOfFirstItemWithEqualStrokes, 0, item);
+        } else {
+            scopedKeymap.push(item);
         }
     }
 
@@ -298,9 +315,9 @@ export class KeybindingRegistry {
      * @param keybinding the keybinding
      * @param separator the separator to be used to stringify {@link KeyCode}s that are part of the {@link KeySequence}
      */
-    acceleratorFor(keybinding: common.Keybinding, separator: string = ' '): string[] {
+    acceleratorFor(keybinding: common.Keybinding, separator: string = ' ', asciiOnly = false): string[] {
         const bindingKeySequence = this.resolveKeybinding(keybinding);
-        return this.acceleratorForSequence(bindingKeySequence, separator);
+        return this.acceleratorForSequence(bindingKeySequence, separator, asciiOnly);
     }
 
     /**
@@ -309,8 +326,8 @@ export class KeybindingRegistry {
      * @param keySequence the keysequence
      * @param separator the separator to be used to stringify {@link KeyCode}s that are part of the {@link KeySequence}
      */
-    acceleratorForSequence(keySequence: KeySequence, separator: string = ' '): string[] {
-        return keySequence.map(keyCode => this.acceleratorForKeyCode(keyCode, separator));
+    acceleratorForSequence(keySequence: KeySequence, separator: string = ' ', asciiOnly = false): string[] {
+        return keySequence.map(keyCode => this.acceleratorForKeyCode(keyCode, separator, asciiOnly));
     }
 
     /**
@@ -318,32 +335,40 @@ export class KeybindingRegistry {
      * @returns a string representing the {@link KeyCode}
      * @param keyCode the keycode
      * @param separator the separator used to separate keys (key and modifiers) in the returning string
+     * @param asciiOnly if `true`, no special characters will be substituted into the string returned. Ensures correct keyboard shortcuts in Electron menus.
      */
-    acceleratorForKeyCode(keyCode: KeyCode, separator: string = ' '): string {
+    acceleratorForKeyCode(keyCode: KeyCode, separator: string = ' ', asciiOnly = false): string {
+        return this.componentsForKeyCode(keyCode, asciiOnly).join(separator);
+    }
+
+    componentsForKeyCode(keyCode: KeyCode, asciiOnly = false): string[] {
         const keyCodeResult = [];
+        const useSymbols = isOSX && !asciiOnly;
         if (keyCode.meta && isOSX) {
-            keyCodeResult.push('Cmd');
+            keyCodeResult.push(useSymbols ? '⌘' : 'Cmd');
         }
         if (keyCode.ctrl) {
-            keyCodeResult.push('Ctrl');
+            keyCodeResult.push(useSymbols ? '⌃' : 'Ctrl');
         }
         if (keyCode.alt) {
-            keyCodeResult.push('Alt');
+            keyCodeResult.push(useSymbols ? '⌥' : 'Alt');
         }
         if (keyCode.shift) {
-            keyCodeResult.push('Shift');
+            keyCodeResult.push(useSymbols ? '⇧' : 'Shift');
         }
         if (keyCode.key) {
-            keyCodeResult.push(this.acceleratorForKey(keyCode.key));
+            keyCodeResult.push(this.acceleratorForKey(keyCode.key, asciiOnly));
         }
-        return keyCodeResult.join(separator);
+        return keyCodeResult;
     }
 
     /**
+     * @param asciiOnly if `true`, no special characters will be substituted into the string returned. Ensures correct keyboard shortcuts in Electron menus.
+     *
      * Return a user visible representation of a single key.
      */
-    acceleratorForKey(key: Key): string {
-        if (isOSX) {
+    acceleratorForKey(key: Key, asciiOnly = false): string {
+        if (isOSX && !asciiOnly) {
             if (key === Key.ARROW_LEFT) {
                 return '←';
             }
@@ -409,20 +434,20 @@ export class KeybindingRegistry {
      */
     getKeybindingsForCommand(commandId: string): ScopedKeybinding[] {
         const result: ScopedKeybinding[] = [];
-
+        const disabledBindings = new Set<string>();
         for (let scope = KeybindingScope.END - 1; scope >= KeybindingScope.DEFAULT; scope--) {
             this.keymaps[scope].forEach(binding => {
-                const command = this.commandRegistry.getCommand(binding.command);
-                if (command) {
-                    if (command.id === commandId) {
+                if (binding.command?.startsWith('-')) {
+                    disabledBindings.add(JSON.stringify({ command: binding.command.substring(1), binding: binding.keybinding, context: binding.context, when: binding.when }));
+                } else {
+                    const command = this.commandRegistry.getCommand(binding.command);
+                    if (command
+                        && command.id === commandId
+                        && !disabledBindings.has(JSON.stringify({ command: binding.command, binding: binding.keybinding, context: binding.context, when: binding.when }))) {
                         result.push({ ...binding, scope });
                     }
                 }
             });
-
-            if (result.length > 0) {
-                return result;
-            }
         }
         return result;
     }
@@ -467,11 +492,18 @@ export class KeybindingRegistry {
      * Only execute if it has no context (global context) or if we're in that context.
      */
     protected isEnabled(binding: common.Keybinding, event: KeyboardEvent): boolean {
+        return this.isEnabledInScope(binding, <HTMLElement>event.target);
+    }
+
+    isEnabledInScope(binding: common.Keybinding, target: HTMLElement | undefined): boolean {
         const context = binding.context && this.contexts[binding.context];
+        if (binding.command && (!this.isPseudoCommand(binding.command) && !this.commandRegistry.isEnabled(binding.command, binding.args))) {
+            return false;
+        }
         if (context && !context.isEnabled(binding)) {
             return false;
         }
-        if (binding.when && !this.whenContextService.match(binding.when, <HTMLElement>event.target)) {
+        if (binding.when && !this.whenContextService.match(binding.when, target)) {
             return false;
         }
         return true;
@@ -509,6 +541,36 @@ export class KeybindingRegistry {
         return input;
     }
 
+    registerEventListeners(win: Window): Disposable {
+        /* vvv HOTFIX begin vvv
+        *
+        * This is a hotfix against issues eclipse/theia#6459 and gitpod-io/gitpod#875 .
+        * It should be reverted after Theia was updated to the newer Monaco.
+        */
+        let inComposition = false;
+        const compositionStart = () => {
+            inComposition = true;
+        };
+        win.document.addEventListener('compositionstart', compositionStart);
+
+        const compositionEnd = () => {
+            inComposition = false;
+        };
+        win.document.addEventListener('compositionend', compositionEnd);
+
+        const keydown = (event: KeyboardEvent) => {
+            if (inComposition !== true) {
+                this.run(event);
+            }
+        };
+        win.document.addEventListener('keydown', keydown, true);
+
+        return Disposable.create(() => {
+            win.document.removeEventListener('compositionstart', compositionStart);
+            win.document.removeEventListener('compositionend', compositionEnd);
+            win.document.removeEventListener('keydown', keydown);
+        });
+    }
     /**
      * Run the command matching to the given keyboard event.
      */
@@ -535,7 +597,7 @@ export class KeybindingRegistry {
             event.stopPropagation();
 
             this.statusBar.setElement('keybinding-status', {
-                text: `(${this.acceleratorForSequence(this.keySequence, '+')}) was pressed, waiting for more keys`,
+                text: nls.localize('theia/core/keybindingStatus', '{0} was pressed, waiting for more keys', `(${this.acceleratorForSequence(this.keySequence, '+')})`),
                 alignment: StatusBarAlignment.LEFT,
                 priority: 2
             });
@@ -566,7 +628,7 @@ export class KeybindingRegistry {
             const { command, context, when, keybinding } = binding;
             if (!this.isUsable(binding)) {
                 disabled = disabled || new Set<string>();
-                disabled.add(JSON.stringify({ command: command.substr(1), context, when, keybinding }));
+                disabled.add(JSON.stringify({ command: command.substring(1), context, when, keybinding }));
                 return false;
             }
             return !disabled?.has(JSON.stringify({ command, context, when, keybinding }));

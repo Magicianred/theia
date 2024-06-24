@@ -1,24 +1,24 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { ILogger } from '@theia/core/lib/common/logger';
 import { StorageService } from '@theia/core/lib/browser/storage-service';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
-import { FrontendApplicationContribution } from '@theia/core/lib/browser/frontend-application';
+import { FrontendApplicationContribution } from '@theia/core/lib/browser/frontend-application-contribution';
 import { CommandRegistry } from '@theia/core/lib/common/command';
 import { EditorCommands } from './editor-command';
 import { EditorWidget } from './editor-widget';
@@ -26,13 +26,16 @@ import { EditorManager } from './editor-manager';
 import { TextEditor, Position, Range, TextDocumentChangeEvent } from './editor';
 import { NavigationLocation, RecentlyClosedEditor } from './navigation/navigation-location';
 import { NavigationLocationService } from './navigation/navigation-location-service';
-import { PreferenceService, PreferenceScope } from '@theia/core/lib/browser';
+import { PreferenceService, PreferenceScope, addEventListener } from '@theia/core/lib/browser';
+import { ConfirmDialog, Dialog } from '@theia/core/lib/browser/dialogs';
+import { nls } from '@theia/core';
 
 @injectable()
 export class EditorNavigationContribution implements Disposable, FrontendApplicationContribution {
 
     private static ID = 'editor-navigation-contribution';
     private static CLOSED_EDITORS_KEY = 'recently-closed-editors';
+    private static MOUSE_NAVIGATION_PREFERENCE = 'workbench.editor.mouseBackForwardToNavigate';
 
     protected readonly toDispose = new DisposableCollection();
     protected readonly toDisposePerCurrentEditor = new DisposableCollection();
@@ -82,7 +85,17 @@ export class EditorNavigationContribution implements Disposable, FrontendApplica
             isEnabled: () => !!this.locationStack.lastEditLocation()
         });
         this.commandRegistry.registerHandler(EditorCommands.CLEAR_EDITOR_HISTORY.id, {
-            execute: () => this.locationStack.clearHistory(),
+            execute: async () => {
+                const shouldClear = await new ConfirmDialog({
+                    title: nls.localizeByDefault('Clear Editor History'),
+                    msg: nls.localizeByDefault('Do you want to clear the history of recently opened editors?'),
+                    ok: Dialog.YES,
+                    cancel: Dialog.NO
+                }).open();
+                if (shouldClear) {
+                    this.locationStack.clearHistory();
+                }
+            },
             isEnabled: () => this.locationStack.locations().length > 0
         });
         this.commandRegistry.registerHandler(EditorCommands.TOGGLE_MINIMAP.id, {
@@ -99,9 +112,47 @@ export class EditorNavigationContribution implements Disposable, FrontendApplica
             execute: () => this.toggleWordWrap(),
             isEnabled: () => true,
         });
+        this.commandRegistry.registerHandler(EditorCommands.TOGGLE_STICKY_SCROLL.id, {
+            execute: () => this.toggleStickyScroll(),
+            isEnabled: () => true,
+            isToggled: () => this.isStickyScrollEnabled()
+        });
         this.commandRegistry.registerHandler(EditorCommands.REOPEN_CLOSED_EDITOR.id, {
             execute: () => this.reopenLastClosedEditor()
         });
+
+        this.installMouseNavigationSupport();
+    }
+
+    protected async installMouseNavigationSupport(): Promise<void> {
+        const mouseNavigationSupport = new DisposableCollection();
+        const updateMouseNavigationListener = () => {
+            mouseNavigationSupport.dispose();
+            if (this.shouldNavigateWithMouse()) {
+                mouseNavigationSupport.push(addEventListener(document.body, 'mousedown', event => this.onMouseDown(event), true));
+            }
+        };
+        this.toDispose.push(this.preferenceService.onPreferenceChanged(change => {
+            if (change.preferenceName === EditorNavigationContribution.MOUSE_NAVIGATION_PREFERENCE) {
+                updateMouseNavigationListener();
+            }
+        }));
+        updateMouseNavigationListener();
+        this.toDispose.push(mouseNavigationSupport);
+    }
+
+    protected async onMouseDown(event: MouseEvent): Promise<void> {
+        // Support navigation in history when mouse buttons 4/5 are pressed
+        switch (event.button) {
+            case 3:
+                event.preventDefault();
+                this.locationStack.back();
+                break;
+            case 4:
+                event.preventDefault();
+                this.locationStack.forward();
+                break;
+        }
     }
 
     /**
@@ -124,7 +175,7 @@ export class EditorNavigationContribution implements Disposable, FrontendApplica
     }
 
     async onStart(): Promise<void> {
-        await this.restoreState();
+        this.restoreState();
     }
 
     onStop(): void {
@@ -152,6 +203,14 @@ export class EditorNavigationContribution implements Disposable, FrontendApplica
         if (index > -1) {
             this.preferenceService.set('editor.wordWrap', values[index % values.length], PreferenceScope.User);
         }
+    }
+
+    /**
+     * Toggle the display of sticky scroll in the editor.
+     */
+    protected async toggleStickyScroll(): Promise<void> {
+        const value: boolean | undefined = this.preferenceService.get('editor.stickyScroll.enabled');
+        this.preferenceService.set('editor.stickyScroll.enabled', !value, PreferenceScope.User);
     }
 
     /**
@@ -274,4 +333,11 @@ export class EditorNavigationContribution implements Disposable, FrontendApplica
         return !!this.preferenceService.get('editor.history.persistClosedEditors');
     }
 
+    private shouldNavigateWithMouse(): boolean {
+        return !!this.preferenceService.get(EditorNavigationContribution.MOUSE_NAVIGATION_PREFERENCE);
+    }
+
+    private isStickyScrollEnabled(): boolean {
+        return !!this.preferenceService.get('editor.stickyScroll.enabled');
+    }
 }

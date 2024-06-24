@@ -1,36 +1,38 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
+import { RequestOptions, RequestService } from '@theia/core/shared/@theia/request';
 import { inject, injectable, named } from '@theia/core/shared/inversify';
 import * as cp from 'child_process';
-import * as fs from 'fs';
+import * as fs from '@theia/core/shared/fs-extra';
 import * as net from 'net';
 import * as path from 'path';
-import * as request from 'request';
-
 import URI from '@theia/core/lib/common/uri';
 import { ContributionProvider } from '@theia/core/lib/common/contribution-provider';
 import { HostedPluginUriPostProcessor, HostedPluginUriPostProcessorSymbolName } from './hosted-plugin-uri-postprocessor';
-import { DebugConfiguration } from '../common';
-import { environment } from '@theia/core';
-import { FileUri } from '@theia/core/lib/node/file-uri';
+import { environment, isWindows } from '@theia/core';
+import { FileUri } from '@theia/core/lib/common/file-uri';
 import { LogType } from '@theia/plugin-ext/lib/common/types';
 import { HostedPluginSupport } from '@theia/plugin-ext/lib/hosted/node/hosted-plugin';
 import { MetadataScanner } from '@theia/plugin-ext/lib/hosted/node/metadata-scanner';
+import { PluginDebugConfiguration } from '../common/plugin-dev-protocol';
 import { HostedPluginProcess } from '@theia/plugin-ext/lib/hosted/node/hosted-plugin-process';
+import { isENOENT } from '@theia/plugin-ext/lib/common/errors';
+
+const DEFAULT_HOSTED_PLUGIN_PORT = 3030;
 
 export const HostedInstanceManager = Symbol('HostedInstanceManager');
 
@@ -58,7 +60,7 @@ export interface HostedInstanceManager {
      * @param debugConfig debug configuration
      * @returns uri where new Theia instance is run
      */
-    debug(pluginUri: URI, debugConfig: DebugConfiguration): Promise<URI>;
+    debug(pluginUri: URI, debugConfig: PluginDebugConfiguration): Promise<URI>;
 
     /**
      * Terminates hosted plugin instance.
@@ -83,7 +85,7 @@ export interface HostedInstanceManager {
      *
      * @param uri uri to the plugin source location
      */
-    isPluginValid(uri: URI): boolean;
+    isPluginValid(uri: URI): Promise<boolean>;
 }
 
 const HOSTED_INSTANCE_START_TIMEOUT_MS = 30000;
@@ -92,7 +94,6 @@ const PROCESS_OPTIONS = {
     cwd: process.cwd(),
     env: { ...process.env }
 };
-delete PROCESS_OPTIONS.env.ELECTRON_RUN_AS_NODE;
 
 @injectable()
 export abstract class AbstractHostedInstanceManager implements HostedInstanceManager {
@@ -100,7 +101,7 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
     protected isPluginRunning: boolean = false;
     protected instanceUri: URI;
     protected pluginUri: URI;
-    protected instanceOptions: object;
+    protected instanceOptions: Omit<RequestOptions, 'url'>;
 
     @inject(HostedPluginSupport)
     protected readonly hostedPluginSupport: HostedPluginSupport;
@@ -111,6 +112,9 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
     @inject(HostedPluginProcess)
     protected readonly hostedPluginProcess: HostedPluginProcess;
 
+    @inject(RequestService)
+    protected readonly request: RequestService;
+
     isRunning(): boolean {
         return this.isPluginRunning;
     }
@@ -119,11 +123,11 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
         return this.doRun(pluginUri, port);
     }
 
-    async debug(pluginUri: URI, debugConfig: DebugConfiguration): Promise<URI> {
+    async debug(pluginUri: URI, debugConfig: PluginDebugConfiguration): Promise<URI> {
         return this.doRun(pluginUri, undefined, debugConfig);
     }
 
-    private async doRun(pluginUri: URI, port?: number, debugConfig?: DebugConfiguration): Promise<URI> {
+    private async doRun(pluginUri: URI, port?: number, debugConfig?: PluginDebugConfiguration): Promise<URI> {
         if (this.isPluginRunning) {
             this.hostedPluginSupport.sendLog({ data: 'Hosted plugin instance is already running.', type: LogType.Info });
             throw new Error('Hosted instance is already running.');
@@ -143,12 +147,11 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
             throw new Error('Not supported plugin location: ' + pluginUri.toString());
         }
 
-        this.instanceUri = await this.postProcessInstanceUri(
-            await this.runHostedPluginTheiaInstance(command, processOptions));
+        this.instanceUri = await this.postProcessInstanceUri(await this.runHostedPluginTheiaInstance(command, processOptions));
         this.pluginUri = pluginUri;
         // disable redirect to grab the release
         this.instanceOptions = {
-            followRedirect: false
+            followRedirects: 0
         };
         this.instanceOptions = await this.postProcessInstanceOptions(this.instanceOptions);
         await this.checkInstanceUriReady();
@@ -157,7 +160,7 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
     }
 
     terminate(): void {
-        if (this.isPluginRunning) {
+        if (this.isPluginRunning && !!this.hostedInstanceProcess.pid) {
             this.hostedPluginProcess.killProcessTree(this.hostedInstanceProcess.pid);
             this.hostedPluginSupport.sendLog({ data: 'Hosted instance has been terminated', type: LogType.Info });
             this.isPluginRunning = false;
@@ -212,36 +215,31 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
      * Ping the plugin URI (checking status of the head)
      */
     private async ping(): Promise<boolean> {
-        return new Promise<boolean>((resolve, reject) => {
+        try {
             const url = this.instanceUri.toString();
-            request.head(url, this.instanceOptions).on('response', res => {
-                // Wait that the status is OK
-                if (res.statusCode === 200) {
-                    resolve(true);
-                } else {
-                    resolve(false);
-                }
-            }).on('error', error => {
-                resolve(false);
-            });
-        });
-    }
-
-    isPluginValid(uri: URI): boolean {
-        const pckPath = path.join(FileUri.fsPath(uri), 'package.json');
-        if (fs.existsSync(pckPath)) {
-            const pck = require(pckPath);
-            try {
-                return !!this.metadata.getScanner(pck);
-            } catch (e) {
-                console.error(e);
-                return false;
-            }
+            // Wait that the status is OK
+            const response = await this.request.request({ url, type: 'HEAD', ...this.instanceOptions });
+            return response.res.statusCode === 200;
+        } catch {
+            return false;
         }
-        return false;
     }
 
-    protected async getStartCommand(port?: number, debugConfig?: DebugConfiguration): Promise<string[]> {
+    async isPluginValid(uri: URI): Promise<boolean> {
+        const pckPath = path.join(FileUri.fsPath(uri), 'package.json');
+        try {
+            const pck = await fs.readJSON(pckPath);
+            this.metadata.getScanner(pck);
+            return true;
+        } catch (err) {
+            if (!isENOENT(err)) {
+                console.error(err);
+            }
+            return false;
+        }
+    }
+
+    protected async getStartCommand(port?: number, debugConfig?: PluginDebugConfiguration): Promise<string[]> {
 
         const processArguments = process.argv;
         let command: string[];
@@ -268,19 +266,7 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
         }
 
         if (debugConfig) {
-            let debugString = '--hosted-plugin-';
-            if (debugConfig.debugMode) {
-                debugString += debugConfig.debugMode;
-            } else {
-                debugString += 'inspect';
-            }
-
-            debugString += '=0.0.0.0';
-
-            if (debugConfig.port) {
-                debugString += ':' + debugConfig.port;
-            }
-            command.push(debugString);
+            command.push(`--hosted-plugin-${debugConfig.debugMode || 'inspect'}=0.0.0.0${debugConfig.debugPort ? ':' + debugConfig.debugPort : ''}`);
         }
         return command;
     }
@@ -289,7 +275,7 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
         return uri;
     }
 
-    protected async postProcessInstanceOptions(options: object): Promise<object> {
+    protected async postProcessInstanceOptions(options: Omit<RequestOptions, 'url'>): Promise<Omit<RequestOptions, 'url'>> {
         return options;
     }
 
@@ -306,6 +292,12 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
                     resolve(new URI(match[1]));
                 }
             };
+
+            if (isWindows) {
+                // Has to be set for running on windows (electron).
+                // See also: https://github.com/nodejs/node/issues/3675
+                options.shell = true;
+            }
 
             this.hostedInstanceProcess = cp.spawn(command.shift()!, command, options);
             this.hostedInstanceProcess.on('error', () => { this.isPluginRunning = false; });
@@ -360,31 +352,28 @@ export class NodeHostedPluginRunner extends AbstractHostedInstanceManager {
     @inject(ContributionProvider) @named(Symbol.for(HostedPluginUriPostProcessorSymbolName))
     protected readonly uriPostProcessors: ContributionProvider<HostedPluginUriPostProcessor>;
 
-    protected async postProcessInstanceUri(uri: URI): Promise<URI> {
+    protected override async postProcessInstanceUri(uri: URI): Promise<URI> {
         for (const uriPostProcessor of this.uriPostProcessors.getContributions()) {
             uri = await uriPostProcessor.processUri(uri);
         }
         return uri;
     }
 
-    protected async postProcessInstanceOptions(options: object): Promise<object> {
+    protected override async postProcessInstanceOptions(options: object): Promise<object> {
         for (const uriPostProcessor of this.uriPostProcessors.getContributions()) {
             options = await uriPostProcessor.processOptions(options);
         }
         return options;
     }
 
-    protected async getStartCommand(port?: number, config?: DebugConfiguration): Promise<string[]> {
+    protected override async getStartCommand(port?: number, debugConfig?: PluginDebugConfiguration): Promise<string[]> {
         if (!port) {
-            if (process.env.HOSTED_PLUGIN_PORT) {
-                port = Number(process.env.HOSTED_PLUGIN_PORT);
-            } else {
-                port = 3030;
-            }
+            port = process.env.HOSTED_PLUGIN_PORT ?
+                Number(process.env.HOSTED_PLUGIN_PORT) :
+                (debugConfig?.debugPort ? Number(debugConfig.debugPort) : DEFAULT_HOSTED_PLUGIN_PORT);
         }
-        return super.getStartCommand(port, config);
+        return super.getStartCommand(port, debugConfig);
     }
-
 }
 
 @injectable()

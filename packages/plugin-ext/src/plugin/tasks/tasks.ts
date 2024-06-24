@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import {
     PLUGIN_RPC_CONTEXT,
@@ -24,13 +24,14 @@ import {
 import * as theia from '@theia/plugin';
 import * as converter from '../type-converters';
 import { CustomExecution, Disposable } from '../types-impl';
-import { RPCProtocol, ConnectionClosedError } from '../../common/rpc-protocol';
+import { RPCProtocol } from '../../common/rpc-protocol';
 import { TaskProviderAdapter } from './task-provider';
 import { Emitter, Event } from '@theia/core/lib/common/event';
 import { TerminalServiceExtImpl } from '../terminal-ext';
 import { UUID } from '@theia/core/shared/@phosphor/coreutils';
+import { CancellationToken } from '@theia/core/lib/common/cancellation';
 
-type ExecutionCallback = (resolvedDefintion: theia.TaskDefinition) => Thenable<theia.Pseudoterminal>;
+type ExecutionCallback = (resolvedDefinition: theia.TaskDefinition) => Thenable<theia.Pseudoterminal>;
 export class TasksExtImpl implements TasksExt {
     private proxy: TasksMain;
 
@@ -48,15 +49,8 @@ export class TasksExtImpl implements TasksExt {
     private readonly onDidExecuteTaskProcess: Emitter<theia.TaskProcessStartEvent> = new Emitter<theia.TaskProcessStartEvent>();
     private readonly onDidTerminateTaskProcess: Emitter<theia.TaskProcessEndEvent> = new Emitter<theia.TaskProcessEndEvent>();
 
-    private disposed = false;
-
     constructor(rpc: RPCProtocol, readonly terminalExt: TerminalServiceExtImpl) {
         this.proxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.TASKS_MAIN);
-        this.fetchTaskExecutions();
-    }
-
-    dispose(): void {
-        this.disposed = true;
     }
 
     get taskExecutions(): ReadonlyArray<theia.TaskExecution> {
@@ -164,37 +158,42 @@ export class TasksExtImpl implements TasksExt {
         throw new Error('Task was not successfully transformed into a task config');
     }
 
-    $provideTasks(handle: number, token: theia.CancellationToken): Promise<TaskDto[] | undefined> {
+    async $provideTasks(handle: number): Promise<TaskDto[]> {
         const adapter = this.adaptersMap.get(handle);
         if (adapter) {
-            return adapter.provideTasks(token).then(tasks => {
-                if (tasks) {
-                    for (const task of tasks) {
-                        if (task.taskType === 'customExecution') {
-                            task.executionId = this.addCustomExecution(task.callback);
-                            task.callback = undefined;
-                        }
+            return adapter.provideTasks(CancellationToken.None).then(tasks => {
+                for (const task of tasks) {
+                    if (task.taskType === 'customExecution') {
+                        this.applyCustomExecution(task);
                     }
                 }
                 return tasks;
             });
         } else {
-            return Promise.reject(new Error('No adapter found to provide tasks'));
+            throw new Error('No adapter found to provide tasks');
         }
     }
 
-    $resolveTask(handle: number, task: TaskDto, token: theia.CancellationToken): Promise<TaskDto | undefined> {
+    async $resolveTask(handle: number, task: TaskDto, token: theia.CancellationToken): Promise<TaskDto> {
         const adapter = this.adaptersMap.get(handle);
         if (adapter) {
             return adapter.resolveTask(task, token).then(resolvedTask => {
-                if (resolvedTask && resolvedTask.taskType === 'customExecution') {
-                    resolvedTask.executionId = this.addCustomExecution(resolvedTask.callback);
-                    resolvedTask.callback = undefined;
+                // ensure we do not lose task type and execution id during resolution as we need it for custom execution
+                resolvedTask.taskType = resolvedTask.taskType ?? task.taskType;
+                if (resolvedTask.taskType === 'customExecution') {
+                    this.applyCustomExecution(resolvedTask);
                 }
                 return resolvedTask;
             });
         } else {
-            return Promise.reject(new Error('No adapter found to resolve task'));
+            throw new Error('No adapter found to resolve task');
+        }
+    }
+
+    private applyCustomExecution(task: TaskDto): void {
+        if (task.callback) {
+            task.executionId = this.addCustomExecution(task.callback);
+            task.callback = undefined;
         }
     }
 
@@ -215,16 +214,9 @@ export class TasksExtImpl implements TasksExt {
         });
     }
 
-    private async fetchTaskExecutions(): Promise<void> {
-        try {
-            const taskExecutions = await this.proxy.$taskExecutions();
-            taskExecutions.forEach(execution => this.getTaskExecution(execution));
-        } catch (error) {
-            if (this.disposed && ConnectionClosedError.is(error)) {
-                return;
-            }
-            console.error(`Can not fetch running tasks: ${error}`);
-        }
+    // Initial `this.executions` map with the running tasks from the previous session
+    async $initLoadedTasks(taskExecutions: TaskExecutionDto[]): Promise<void> {
+        taskExecutions.forEach(execution => this.getTaskExecution(execution));
     }
 
     private getTaskExecution(execution: TaskExecutionDto): theia.TaskExecution {

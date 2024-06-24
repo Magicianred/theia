@@ -1,34 +1,31 @@
-/********************************************************************************
- * Copyright (C) 2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { enableJSDOM } from '@theia/core/lib/browser/test/jsdom';
 let disableJSDOM = enableJSDOM();
 
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
-import { ApplicationProps } from '@theia/application-package/lib/application-props';
-FrontendApplicationConfigProvider.set({
-    ...ApplicationProps.DEFAULT.frontend.config
-});
+FrontendApplicationConfigProvider.set({});
 
 import { Container } from '@theia/core/shared/inversify';
 import { Git, Repository } from '../common';
 import { DugiteGit } from '../node/dugite-git';
 import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
 import { FileStat, FileChangesEvent } from '@theia/filesystem/lib/common/files';
-import { Emitter, CommandService } from '@theia/core';
+import { Emitter, CommandService, Disposable } from '@theia/core';
 import { LocalStorageService, StorageService, LabelProvider } from '@theia/core/lib/browser';
 import { GitRepositoryProvider } from './git-repository-provider';
 import * as sinon from 'sinon';
@@ -36,7 +33,7 @@ import * as chai from 'chai';
 import { GitCommitMessageValidator } from './git-commit-message-validator';
 import { ScmService } from '@theia/scm/lib/browser/scm-service';
 import { ScmContextKeyService } from '@theia/scm/lib/browser/scm-context-key-service';
-import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
+import { ContextKeyService, ContextKeyServiceDummyImpl } from '@theia/core/lib/browser/context-key-service';
 import { GitScmProvider } from './git-scm-provider';
 import { createGitScmProviderFactory } from './git-frontend-module';
 import { EditorManager } from '@theia/editor/lib/browser';
@@ -98,13 +95,13 @@ describe('GitRepositoryProvider', () => {
         testContainer.bind(ScmService).toSelf().inSingletonScope();
         testContainer.bind(GitScmProvider.Factory).toFactory(createGitScmProviderFactory);
         testContainer.bind(ScmContextKeyService).toSelf().inSingletonScope();
-        testContainer.bind(ContextKeyService).toSelf().inSingletonScope();
+        testContainer.bind(ContextKeyService).to(ContextKeyServiceDummyImpl).inSingletonScope();
         testContainer.bind(GitCommitMessageValidator).toSelf().inSingletonScope();
         testContainer.bind(EditorManager).toConstantValue(<EditorManager>{});
         testContainer.bind(GitErrorHandler).toConstantValue(<GitErrorHandler>{});
         testContainer.bind(CommandService).toConstantValue(<CommandService>{});
         testContainer.bind(LabelProvider).toConstantValue(<LabelProvider>{});
-        testContainer.bind(GitPreferences).toConstantValue(<GitPreferences>{});
+        testContainer.bind(GitPreferences).toConstantValue({ onPreferenceChanged: () => Disposable.NULL });
         testContainer.bind(GitRepositoryTracker).toConstantValue(mockGitRepositoryTracker);
 
         sinon.stub(mockWorkspaceService, 'onWorkspaceChanged').value(mockRootChangeEmitter.event);
@@ -122,7 +119,7 @@ describe('GitRepositoryProvider', () => {
         (<sinon.SinonStub>mockFilesystem.exists).resolves(true);
         (<sinon.SinonStub>mockGit.repositories).withArgs(folderA.resource.toString(), {}).resolves(allRepos);
 
-        await gitRepositoryProvider['initialize']();
+        await gitRepositoryProvider['doInit']();
         expect(gitRepositoryProvider.allRepositories.length).to.eq(allRepos.length);
         expect(gitRepositoryProvider.allRepositories[0].localUri).to.eq(allRepos[0].localUri);
         expect(gitRepositoryProvider.allRepositories[1].localUri).to.eq(allRepos[1].localUri);
@@ -156,7 +153,7 @@ describe('GitRepositoryProvider', () => {
                 done();
             }
         });
-        gitRepositoryProvider['initialize']().then(() => {
+        gitRepositoryProvider['doInit']().then(() => {
             const newRoots = [folderA, folderB];
             stubWsRoots.returns(newRoots);
             sinon.stub(mockWorkspaceService, 'roots').resolves(newRoots);
@@ -198,7 +195,7 @@ describe('GitRepositoryProvider', () => {
                 done();
             }
         });
-        gitRepositoryProvider['initialize']().then(() =>
+        gitRepositoryProvider['doInit']().then(() =>
             mockFileChangeEmitter.fire(new FileChangesEvent([]))
         ).catch(e =>
             done(new Error('gitRepositoryProvider.initialize() throws an error'))
@@ -218,7 +215,7 @@ describe('GitRepositoryProvider', () => {
         (<sinon.SinonStub>mockFilesystem.exists).withArgs(folderB.resource.toString()).resolves(false); // folderB does not exist
         (<sinon.SinonStub>mockGit.repositories).withArgs(folderA.resource.toString(), {}).resolves(allReposA);
 
-        await gitRepositoryProvider['initialize']();
+        await gitRepositoryProvider['doInit']();
         expect(gitRepositoryProvider.allRepositories.length).to.eq(allReposA.length);
         expect(gitRepositoryProvider.allRepositories[0].localUri).to.eq(allReposA[0].localUri);
         expect(gitRepositoryProvider.allRepositories[1].localUri).to.eq(allReposA[1].localUri);
@@ -240,7 +237,7 @@ describe('GitRepositoryProvider', () => {
         (<sinon.SinonStub>mockGit.repositories).withArgs(folderB.resource.toString(), {}).resolves(allReposB);
         (<sinon.SinonStub>mockGit.repositories).withArgs(folderB.resource.toString(), { maxCount: 1 }).resolves([allReposB[0]]);
 
-        await gitRepositoryProvider['initialize']();
+        await gitRepositoryProvider['doInit']();
         expect(gitRepositoryProvider.selectedRepository && gitRepositoryProvider.selectedRepository.localUri).to.eq(allReposA[0].localUri);
     });
 });

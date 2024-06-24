@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, named } from 'inversify';
 import { TextDocumentContentChangeEvent } from 'vscode-languageserver-protocol';
@@ -25,6 +25,7 @@ import { CancellationToken } from './cancellation';
 import { ApplicationError } from './application-error';
 import { ReadableStream, Readable } from './stream';
 import { SyncReferenceCollection, Reference } from './reference';
+import { MarkdownString } from './markdown-rendering';
 
 export interface ResourceVersion {
 }
@@ -55,6 +56,10 @@ export interface Resource extends Disposable {
      * Undefined if a resource did not read content yet.
      */
     readonly encoding?: string | undefined;
+
+    readonly onDidChangeReadOnly?: Event<boolean | MarkdownString>;
+
+    readonly readOnly?: boolean | MarkdownString;
     /**
      * Reads latest content of this resource.
      *
@@ -316,4 +321,110 @@ export class InMemoryTextResourceResolver implements ResourceResolver {
         }
         return new InMemoryTextResource(uri);
     }
+}
+
+export const UNTITLED_SCHEME = 'untitled';
+
+let untitledResourceSequenceIndex = 0;
+
+@injectable()
+export class UntitledResourceResolver implements ResourceResolver {
+
+    protected readonly resources = new Map<string, UntitledResource>();
+
+    has(uri: URI): boolean {
+        if (uri.scheme !== UNTITLED_SCHEME) {
+            throw new Error('The given uri is not untitled file uri: ' + uri);
+        } else {
+            return this.resources.has(uri.toString());
+        }
+    }
+
+    async resolve(uri: URI): Promise<UntitledResource> {
+        if (uri.scheme !== UNTITLED_SCHEME) {
+            throw new Error('The given uri is not untitled file uri: ' + uri);
+        } else {
+            const untitledResource = this.resources.get(uri.toString());
+            if (!untitledResource) {
+                return this.createUntitledResource('', '', uri);
+            } else {
+                return untitledResource;
+            }
+        }
+    }
+
+    async createUntitledResource(content?: string, extension?: string, uri?: URI): Promise<UntitledResource> {
+        if (!uri) {
+            uri = this.createUntitledURI(extension);
+        }
+        return new UntitledResource(this.resources, uri, content);
+    }
+
+    createUntitledURI(extension?: string, parent?: URI): URI {
+        let counter = 1; // vscode starts at 1
+        let untitledUri;
+        do {
+            const name = `Untitled-${counter}${extension ?? ''}`;
+            if (parent) {
+                untitledUri = parent.resolve(name).withScheme(UNTITLED_SCHEME);
+            }
+            untitledUri = new URI().resolve(name).withScheme(UNTITLED_SCHEME);
+            counter++;
+        } while (this.has(untitledUri));
+        return untitledUri;
+    }
+}
+
+export class UntitledResource implements Resource {
+
+    protected readonly onDidChangeContentsEmitter = new Emitter<void>();
+    get onDidChangeContents(): Event<void> {
+        return this.onDidChangeContentsEmitter.event;
+    }
+
+    constructor(private resources: Map<string, UntitledResource>, public uri: URI, private content?: string) {
+        this.resources.set(this.uri.toString(), this);
+    }
+
+    dispose(): void {
+        this.resources.delete(this.uri.toString());
+        this.onDidChangeContentsEmitter.dispose();
+    }
+
+    async readContents(options?: { encoding?: string | undefined; } | undefined): Promise<string> {
+        if (this.content) {
+            return this.content;
+        } else {
+            return '';
+        }
+    }
+
+    async saveContents(content: string, options?: { encoding?: string, overwriteEncoding?: boolean }): Promise<void> {
+        // This function must exist to ensure readOnly is false for the Monaco editor.
+        // However it should not be called because saving 'untitled' is always processed as 'Save As'.
+        throw Error('Untitled resources cannot be saved.');
+    }
+
+    protected fireDidChangeContents(): void {
+        this.onDidChangeContentsEmitter.fire(undefined);
+    }
+
+    get version(): ResourceVersion | undefined {
+        return undefined;
+    }
+
+    get encoding(): string | undefined {
+        return undefined;
+    }
+}
+
+/**
+ * @deprecated Since 1.27.0. Please use `UntitledResourceResolver.createUntitledURI` instead.
+ */
+export function createUntitledURI(extension?: string, parent?: URI): URI {
+    const name = `Untitled-${untitledResourceSequenceIndex++}${extension ?? ''}`;
+    if (parent) {
+        return parent.resolve(name).withScheme(UNTITLED_SCHEME);
+    }
+    return new URI().resolve(name).withScheme(UNTITLED_SCHEME);
 }

@@ -1,24 +1,24 @@
-/********************************************************************************
- * Copyright (C) 2020 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { ColorTheme, ColorThemeKind } from './types-impl';
 import { Emitter, Event } from '@theia/core/lib/common/event';
 import { ThemingExt } from '../common';
 import { RPCProtocol } from '../common/rpc-protocol';
-import { ThemeType } from '@theia/core/lib/browser/theming';
+import { ThemeType } from '@theia/core/lib/common/theme';
 
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -29,13 +29,13 @@ import { ThemeType } from '@theia/core/lib/browser/theming';
 export class ThemingExtImpl implements ThemingExt {
 
     private actual: ColorTheme;
-    private ondDidChangeActiveColorTheme: Emitter<ColorTheme>;
+    private _onDidChangeActiveColorTheme: Emitter<ColorTheme>;
 
     constructor(
         readonly rpc: RPCProtocol
     ) {
         this.actual = new ColorTheme(ColorThemeKind.Dark);
-        this.ondDidChangeActiveColorTheme = new Emitter<ColorTheme>();
+        this._onDidChangeActiveColorTheme = new Emitter<ColorTheme>();
     }
 
     get activeColorTheme(): ColorTheme {
@@ -44,7 +44,7 @@ export class ThemingExtImpl implements ThemingExt {
 
     $onColorThemeChange(type: ThemeType): void {
         this.actual = new ColorTheme(this.convertKind(type));
-        this.ondDidChangeActiveColorTheme.fire(this.actual);
+        this._onDidChangeActiveColorTheme.fire(this.actual);
     }
 
     protected convertKind(type: ThemeType): ColorThemeKind {
@@ -59,12 +59,15 @@ export class ThemingExtImpl implements ThemingExt {
             case 'hc':
                 kind = ColorThemeKind.HighContrast;
                 break;
+            case 'hcLight':
+                kind = ColorThemeKind.HighContrastLight;
+                break;
         }
         return kind;
     }
 
     get onDidChangeActiveColorTheme(): Event<ColorTheme> {
-        return this.ondDidChangeActiveColorTheme.event;
+        return this._onDidChangeActiveColorTheme.event;
     }
 
 }

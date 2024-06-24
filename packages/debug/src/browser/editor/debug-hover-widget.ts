@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import debounce = require('@theia/core/shared/lodash.debounce');
 
@@ -27,6 +27,12 @@ import { DebugEditor } from './debug-editor';
 import { DebugExpressionProvider } from './debug-expression-provider';
 import { DebugHoverSource } from './debug-hover-source';
 import { DebugVariable } from '../console/debug-console-items';
+import * as monaco from '@theia/monaco-editor-core';
+import { StandaloneServices } from '@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneServices';
+import { ILanguageFeaturesService } from '@theia/monaco-editor-core/esm/vs/editor/common/services/languageFeatures';
+import { CancellationTokenSource } from '@theia/monaco-editor-core/esm/vs/base/common/cancellation';
+import { Position } from '@theia/monaco-editor-core/esm/vs/editor/common/core/position';
+import { ArrayUtils } from '@theia/core';
 
 export interface ShowDebugHoverOptions {
     selection: monaco.Range
@@ -56,8 +62,6 @@ export function createDebugHoverWidgetContainer(parent: interfaces.Container, ed
 @injectable()
 export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.IContentWidget {
 
-    protected readonly toDispose = new DisposableCollection();
-
     @inject(DebugEditor)
     protected readonly editor: DebugEditor;
 
@@ -85,13 +89,16 @@ export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.
     }
 
     @postConstruct()
-    protected init(): void {
+    protected override init(): void {
         super.init();
         this.domNode.className = 'theia-debug-hover';
         this.titleNode.className = 'theia-debug-hover-title';
         this.domNode.appendChild(this.titleNode);
         this.contentNode.className = 'theia-debug-hover-content';
         this.domNode.appendChild(this.contentNode);
+
+        // for stopping scroll events from contentNode going to the editor
+        this.contentNode.addEventListener('wheel', e => e.stopPropagation());
 
         this.editor.getControl().addContentWidget(this);
         this.source = this.hoverSource;
@@ -107,15 +114,15 @@ export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.
         ]);
     }
 
-    dispose(): void {
+    override dispose(): void {
         this.toDispose.dispose();
     }
 
-    show(options?: ShowDebugHoverOptions): void {
+    override show(options?: ShowDebugHoverOptions): void {
         this.schedule(() => this.doShow(options), options && options.immediate);
     }
 
-    hide(options?: HideDebugHoverOptions): void {
+    override hide(options?: HideDebugHoverOptions): void {
         this.schedule(() => this.doHide(), options && options.immediate);
     }
 
@@ -147,6 +154,8 @@ export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.
     }
 
     protected async doShow(options: ShowDebugHoverOptions | undefined = this.options): Promise<void> {
+        const cancellationSource = new CancellationTokenSource();
+
         if (!this.isEditorFrame()) {
             this.hide();
             return;
@@ -163,7 +172,51 @@ export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.
         }
 
         this.options = options;
-        const matchingExpression = this.expressionProvider.get(this.editor.getControl().getModel()!, options.selection);
+        let matchingExpression: string | undefined;
+
+        const pluginExpressionProvider = StandaloneServices.get(ILanguageFeaturesService).evaluatableExpressionProvider;
+        const textEditorModel = this.editor.document.textEditorModel;
+
+        if (pluginExpressionProvider && pluginExpressionProvider.has(textEditorModel)) {
+            const registeredProviders = pluginExpressionProvider.ordered(textEditorModel);
+            const position = new Position(this.options!.selection.startLineNumber, this.options!.selection.startColumn);
+
+            const promises = registeredProviders.map(support =>
+                Promise.resolve(support.provideEvaluatableExpression(textEditorModel, position, cancellationSource.token))
+            );
+
+            const results = await Promise.all(promises).then(ArrayUtils.coalesce);
+            if (results.length > 0) {
+                matchingExpression = results[0].expression;
+                const range = results[0].range;
+
+                if (!matchingExpression) {
+                    const lineContent = textEditorModel.getLineContent(position.lineNumber);
+                    matchingExpression = lineContent.substring(range.startColumn - 1, range.endColumn - 1);
+                }
+            }
+        } else { // use fallback if no provider was registered
+            matchingExpression = this.expressionProvider.get(this.editor.getControl().getModel()!, options.selection);
+            if (matchingExpression) {
+                const expressionLineContent = this.editor
+                    .getControl()
+                    .getModel()!
+                    .getLineContent(this.options.selection.startLineNumber);
+                const startColumn =
+                    expressionLineContent.indexOf(
+                        matchingExpression,
+                        this.options.selection.startColumn - matchingExpression.length
+                    ) + 1;
+                const endColumn = startColumn + matchingExpression.length;
+                this.options.selection = new monaco.Range(
+                    this.options.selection.startLineNumber,
+                    startColumn,
+                    this.options.selection.startLineNumber,
+                    endColumn
+                );
+            }
+        }
+
         if (!matchingExpression) {
             this.hide();
             return;
@@ -218,17 +271,18 @@ export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.
             return undefined!;
         }
         const position = this.options && this.options.selection.getStartPosition();
-        const word = position && this.editor.getControl().getModel()!.getWordAtPosition(position);
-        return position && word ? {
-            position: new monaco.Position(position.lineNumber, word.startColumn),
-            preference: [
-                monaco.editor.ContentWidgetPositionPreference.ABOVE,
-                monaco.editor.ContentWidgetPositionPreference.BELOW
-            ]
-        } : undefined!;
+        return position
+            ? {
+                position: new monaco.Position(position.lineNumber, position.column),
+                preference: [
+                    monaco.editor.ContentWidgetPositionPreference.ABOVE,
+                    monaco.editor.ContentWidgetPositionPreference.BELOW,
+                ],
+            }
+            : undefined!;
     }
 
-    protected onUpdateRequest(msg: Message): void {
+    protected override onUpdateRequest(msg: Message): void {
         super.onUpdateRequest(msg);
         const { expression } = this.hoverSource;
         const value = expression && expression.value || '';
@@ -236,7 +290,7 @@ export class DebugHoverWidget extends SourceTreeWidget implements monaco.editor.
         this.titleNode.title = value;
     }
 
-    protected onAfterAttach(msg: Message): void {
+    protected override onAfterAttach(msg: Message): void {
         super.onAfterAttach(msg);
         this.addKeyListener(this.domNode, Key.ESCAPE, () => this.hide());
     }

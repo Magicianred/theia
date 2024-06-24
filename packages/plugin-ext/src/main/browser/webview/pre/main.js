@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2019 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -67,117 +67,142 @@
     };
 
     const defaultCssRules = `
-	body {
-		background-color: var(--vscode-editor-background);
-		color: var(--vscode-editor-foreground);
-		font-family: var(--vscode-font-family);
-		font-weight: var(--vscode-font-weight);
-		font-size: var(--vscode-font-size);
-		margin: 0;
-		padding: 0 20px;
-	}
+    body {
+        background-color: var(--vscode-editor-background);
+        color: var(--vscode-editor-foreground);
+        font-family: var(--vscode-font-family);
+        font-weight: var(--vscode-font-weight);
+        font-size: var(--vscode-font-size);
+        margin: 0;
+        padding: 0 20px;
+    }
 
-	img {
-		max-width: 100%;
-		max-height: 100%;
-	}
+    img {
+        max-width: 100%;
+        max-height: 100%;
+    }
 
-	a {
-		color: var(--vscode-textLink-foreground);
-	}
+    a {
+        color: var(--vscode-textLink-foreground);
+    }
 
-	a:hover {
-		color: var(--vscode-textLink-activeForeground);
-	}
+    a:hover {
+        color: var(--vscode-textLink-activeForeground);
+    }
 
-	a:focus,
-	input:focus,
-	select:focus,
-	textarea:focus {
-		outline: 1px solid -webkit-focus-ring-color;
-		outline-offset: -1px;
-	}
+    a:focus,
+    input:focus,
+    select:focus,
+    textarea:focus {
+        outline: 1px solid -webkit-focus-ring-color;
+        outline-offset: -1px;
+    }
 
-	code {
-		color: var(--vscode-textPreformat-foreground);
-	}
+    code {
+        color: var(--vscode-textPreformat-foreground);
+    }
 
-	blockquote {
-		background: var(--vscode-textBlockQuote-background);
-		border-color: var(--vscode-textBlockQuote-border);
-	}
+    blockquote {
+        background: var(--vscode-textBlockQuote-background);
+        border-color: var(--vscode-textBlockQuote-border);
+    }
 
-	kbd {
-		color: var(--vscode-editor-foreground);
-		border-radius: 3px;
-		vertical-align: middle;
-		padding: 1px 3px;
+    kbd {
+        color: var(--vscode-editor-foreground);
+        border-radius: 3px;
+        vertical-align: middle;
+        padding: 1px 3px;
 
-		background-color: hsla(0,0%,50%,.17);
-		border: 1px solid rgba(71,71,71,.4);
-		border-bottom-color: rgba(88,88,88,.4);
-		box-shadow: inset 0 -1px 0 rgba(88,88,88,.4);
-	}
-	.vscode-light kbd {
-		background-color: hsla(0,0%,87%,.5);
-		border: 1px solid hsla(0,0%,80%,.7);
-		border-bottom-color: hsla(0,0%,73%,.7);
-		box-shadow: inset 0 -1px 0 hsla(0,0%,73%,.7);
-	}
+        background-color: hsla(0,0%,50%,.17);
+        border: 1px solid rgba(71,71,71,.4);
+        border-bottom-color: rgba(88,88,88,.4);
+        box-shadow: inset 0 -1px 0 rgba(88,88,88,.4);
+    }
+    .vscode-light kbd {
+        background-color: hsla(0,0%,87%,.5);
+        border: 1px solid hsla(0,0%,80%,.7);
+        border-bottom-color: hsla(0,0%,73%,.7);
+        box-shadow: inset 0 -1px 0 hsla(0,0%,73%,.7);
+    }
 
-	::-webkit-scrollbar {
-		width: 10px;
-		height: 10px;
-	}
+    ::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+    }
 
-	::-webkit-scrollbar-thumb {
-		background-color: var(--vscode-scrollbarSlider-background);
-	}
-	::-webkit-scrollbar-thumb:hover {
-		background-color: var(--vscode-scrollbarSlider-hoverBackground);
-	}
-	::-webkit-scrollbar-thumb:active {
-		background-color: var(--vscode-scrollbarSlider-activeBackground);
-	}`;
+    ::-webkit-scrollbar-thumb {
+        background-color: var(--vscode-scrollbarSlider-background);
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background-color: var(--vscode-scrollbarSlider-hoverBackground);
+    }
+    ::-webkit-scrollbar-thumb:active {
+        background-color: var(--vscode-scrollbarSlider-activeBackground);
+    }`;
 
     /**
      * @param {*} [state]
      * @return {string}
      */
-    function getVsCodeApiScript(state) {
+    function getDefaultScript(state) {
         return `
-			const acquireVsCodeApi = (function() {
-				const originalPostMessage = window.parent.postMessage.bind(window.parent);
-				const targetOrigin = '*';
-				let acquired = false;
+globalThis.acquireVsCodeApi = (function() {
+    const originalPostMessage = window.parent.postMessage.bind(window.parent);
+    const originalConsole = {...console};
+    const targetOrigin = '*';
+    let acquired = false;
 
-				let state = ${state ? `JSON.parse(${JSON.stringify(state)})` : undefined};
+    let state = ${state ? `JSON.parse(${JSON.stringify(state)})` : undefined};
 
-				return () => {
-					if (acquired) {
-						throw new Error('An instance of the VS Code API has already been acquired');
-					}
-					acquired = true;
-					return Object.freeze({
-						postMessage: function(msg) {
-							return originalPostMessage({ command: 'onmessage', data: msg }, targetOrigin);
-						},
-						setState: function(newState) {
-							state = newState;
-							originalPostMessage({ command: 'do-update-state', data: JSON.stringify(newState) }, targetOrigin);
-							return newState;
-						},
-						getState: function() {
-							return state;
-						}
-					});
-				};
-			})();
-            const acquireTheiaApi = acquireVsCodeApi;
-			delete window.parent;
-			delete window.top;
-			delete window.frameElement;
-		`;
+    const forwardConsoleLog = (level, msg, args) => {
+        let message, optionalParams;
+        try {
+            if (msg) {
+                message = JSON.stringify(msg) ?? null;
+            }
+            if (args) {
+                optionalParams = JSON.stringify(args) ?? null;
+            }
+        } catch (e) {
+            // Log non serializable objects inside of view
+            originalConsole[level](msg, args);
+            return;
+        }
+        originalPostMessage({ command: 'onconsole', data: { level, message, optionalParams } }, targetOrigin);
+    };
+
+    console.log = (message, args) => forwardConsoleLog('log', message, args);
+    console.info = (message, args) => forwardConsoleLog('info', message, args);
+    console.warn = (message, args) => forwardConsoleLog('warn', message, args);
+    console.error = (message, args) => forwardConsoleLog('error', message, args);
+    console.debug = (message, args) => forwardConsoleLog('debug', message, args);
+    console.trace = (message, args) => forwardConsoleLog('trace', message, args);
+
+    return () => {
+        if (acquired) {
+            throw new Error('An instance of the VS Code API has already been acquired');
+        }
+        acquired = true;
+        return Object.freeze({
+            postMessage: function (msg) {
+                return originalPostMessage({ command: 'onmessage', data: msg }, targetOrigin);
+            },
+            setState: function (newState) {
+                state = newState;
+                originalPostMessage({ command: 'do-update-state', data: JSON.stringify(newState) }, targetOrigin);
+                return newState;
+            },
+            getState: function () {
+                return state;
+            }
+        });
+    };
+})();
+globalThis.acquireTheiaApi = acquireVsCodeApi;
+delete window.parent;
+delete window.top;
+delete window.frameElement;        
+`;
     }
 
     /**
@@ -193,7 +218,6 @@
             initialScrollProgress: undefined
         };
 
-
         /**
          * @param {HTMLDocument?} document
          * @param {HTMLElement?} body
@@ -205,7 +229,9 @@
 
             if (body) {
                 body.classList.remove('vscode-light', 'vscode-dark', 'vscode-high-contrast');
-                body.classList.add(initData.activeTheme);
+                body.classList.add(initData.activeThemeType);
+                body.setAttribute('data-vscode-theme-kind', initData.activeThemeType);
+                body.setAttribute('data-vscode-theme-name', initData.activeThemeName);
             }
 
             if (initData.styles) {
@@ -231,7 +257,7 @@
                     if (node.getAttribute('href') === '#') {
                         event.view.scrollTo(0, 0);
                     } else if (node.hash && (node.getAttribute('href') === node.hash || (baseElement && node.href.indexOf(baseElement.href) >= 0))) {
-                        let scrollTarget = event.view.document.getElementById(node.hash.substr(1, node.hash.length - 1));
+                        let scrollTarget = event.view.document.getElementById(node.hash.substring(1, node.hash.length));
                         if (scrollTarget) {
                             scrollTarget.scrollIntoView();
                         }
@@ -313,9 +339,34 @@
                 clientY: e.clientY,
                 ctrlKey: e.ctrlKey,
                 metaKey: e.metaKey,
-                shiftKey: e.shiftKey
+                shiftKey: e.shiftKey,
+                // @ts-ignore the dataset should exist if the target is an element
             });
         };
+
+        const handleContextMenu = (e) => {
+            if (e.defaultPrevented) {
+                return;
+            }
+
+            e.preventDefault();
+
+            host.postMessage('did-context-menu', {
+                clientX: e.clientX,
+                clientY: e.clientY,
+                context: findVscodeContext(e.target)
+            });
+        };
+
+        function findVscodeContext(node) {
+            if (node) {
+                if (node.dataset?.vscodeContext) {
+                    return JSON.parse(node.dataset.vscodeContext);
+                }
+                return findVscodeContext(node.parentElement);
+            }
+            return {};
+        }
 
         function preventDefaultBrowserHotkeys(e) {
             var isOSX = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
@@ -368,7 +419,7 @@
             // apply default script
             if (options.allowScripts) {
                 const defaultScript = newDocument.createElement('script');
-                defaultScript.textContent = getVsCodeApiScript(data.state);
+                defaultScript.textContent = getDefaultScript(data.state);
                 newDocument.head.prepend(defaultScript);
             }
 
@@ -380,20 +431,21 @@
 
             applyStyles(newDocument, newDocument.body);
 
+            const sameOrigin = '\'self\'';  // see: https://content-security-policy.com/self/
             // Check for CSP
             const csp = newDocument.querySelector('meta[http-equiv="Content-Security-Policy"]');
-            if (!csp) {
-                host.postMessage('no-csp-found');
-            } else {
-                // Rewrite vscode-resource in csp
-                if (data.endpoint) {
+            if (csp !== null) {
+                const cspContent = csp.getAttribute('content');
+                if (cspContent !== null) {
+                    // Rewrite vscode-resource in csp
                     try {
-                        const endpointUrl = new URL(data.endpoint);
-                        csp.setAttribute('content', csp.getAttribute('content').replace(/(?:vscode|theia)-resource:(?=(\s|;|$))/g, endpointUrl.origin));
+                        csp.setAttribute('content', cspContent.replace(/(vscode-webview-resource|vscode-resource):(?=(\s|;|$))/g, sameOrigin));
                     } catch (e) {
                         console.error('Could not rewrite csp');
                     }
                 }
+            } else {
+                host.postMessage('no-csp-found');
             }
 
             // set DOCTYPE for newDocument explicitly as DOMParser.parseFromString strips it off
@@ -410,7 +462,8 @@
 
             host.onMessage('styles', (_event, data) => {
                 initData.styles = data.styles;
-                initData.activeTheme = data.activeTheme;
+                initData.activeThemeType = data.activeThemeType;
+                initData.activeThemeName = data.activeThemeName;
 
                 const target = getActiveFrame();
                 if (!target) {
@@ -477,7 +530,14 @@
                 const newFrame = document.createElement('iframe');
                 newFrame.setAttribute('id', 'pending-frame');
                 newFrame.setAttribute('frameborder', '0');
-                newFrame.setAttribute('sandbox', options.allowScripts ? 'allow-scripts allow-forms allow-same-origin' : 'allow-same-origin');
+                const sandboxOptions = ['allow-same-origin'];
+                if (options.allowScripts) {
+                    sandboxOptions.push('allow-scripts', 'allow-downloads');
+                }
+                if (options.allowForms ?? options.allowScripts) {
+                    sandboxOptions.push('allow-forms');
+                }
+                newFrame.setAttribute('sandbox', sandboxOptions.join(' '));
                 if (host.fakeLoad) {
                     // We should just be able to use srcdoc, but I wasn't
                     // seeing the service worker applying properly.
@@ -567,7 +627,7 @@
                     newFrame.contentWindow.addEventListener('keydown', handleInnerKeydown);
                     newFrame.contentWindow.addEventListener('mousedown', handleInnerMousedown);
                     newFrame.contentWindow.addEventListener('mouseup', handleInnerMouseup);
-                    newFrame.contentWindow.addEventListener('contextmenu', e => e.preventDefault());
+                    newFrame.contentWindow.addEventListener('contextmenu', handleContextMenu);
 
                     if (host.onIframeLoaded) {
                         host.onIframeLoaded(newFrame);

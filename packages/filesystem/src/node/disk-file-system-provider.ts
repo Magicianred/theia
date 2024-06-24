@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2020 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -24,7 +24,7 @@
 
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { basename, dirname, normalize, join } from 'path';
-import { v4 } from 'uuid';
+import { generateUuid } from '@theia/core/lib/common/uuid';
 import * as os from 'os';
 import * as fs from 'fs';
 import {
@@ -35,7 +35,7 @@ import {
 import { promisify } from 'util';
 import URI from '@theia/core/lib/common/uri';
 import { Path } from '@theia/core/lib/common/path';
-import { FileUri } from '@theia/core/lib/node/file-uri';
+import { FileUri } from '@theia/core/lib/common/file-uri';
 import { Event, Emitter } from '@theia/core/lib/common/event';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { OS, isWindows } from '@theia/core/lib/common/os';
@@ -54,7 +54,7 @@ import {
     FileSystemProviderError,
     FileChange,
     WatchOptions,
-    FileUpdateOptions, FileUpdateResult, FileReadStreamOptions
+    FileUpdateOptions, FileUpdateResult, FileReadStreamOptions, FilePermission
 } from '../common/files';
 import { FileSystemWatcherServer } from '../common/filesystem-watcher-protocol';
 import trash = require('trash');
@@ -65,6 +65,7 @@ import { BinaryBuffer } from '@theia/core/lib/common/buffer';
 import { ReadableStreamEvents, newWriteableStream } from '@theia/core/lib/common/stream';
 import { CancellationToken } from '@theia/core/lib/common/cancellation';
 import { readFileIntoStream } from '../common/io';
+import { Mode } from 'stat-mode';
 
 export namespace DiskFileSystemProvider {
     export interface StatAndLink {
@@ -151,12 +152,13 @@ export class DiskFileSystemProvider implements Disposable,
     async stat(resource: URI): Promise<Stat> {
         try {
             const { stat, symbolicLink } = await this.statLink(this.toFilePath(resource)); // cannot use fs.stat() here to support links properly
-
+            const mode = new Mode(stat);
             return {
                 type: this.toType(stat, symbolicLink),
                 ctime: stat.birthtime.getTime(), // intentionally not using ctime here, we want the creation time
                 mtime: stat.mtime.getTime(),
-                size: stat.size
+                size: stat.size,
+                permissions: !mode.owner.write ? FilePermission.Readonly : undefined,
             };
         } catch (error) {
             throw this.toFileSystemProviderError(error);
@@ -507,7 +509,12 @@ export class DiskFileSystemProvider implements Disposable,
             if (opts.recursive) {
                 await this.rimraf(filePath);
             } else {
-                await promisify(unlink)(filePath);
+                const stat = await promisify(lstat)(filePath);
+                if (stat.isDirectory() && !stat.isSymbolicLink()) {
+                    await promisify(rmdir)(filePath);
+                } else {
+                    await promisify(unlink)(filePath);
+                }
             }
         } else {
             await trash(filePath);
@@ -523,7 +530,7 @@ export class DiskFileSystemProvider implements Disposable,
 
     protected async rimrafMove(path: string): Promise<void> {
         try {
-            const pathInTemp = join(os.tmpdir(), v4());
+            const pathInTemp = join(os.tmpdir(), generateUuid());
             try {
                 await promisify(rename)(path, pathInTemp);
             } catch (error) {
@@ -708,7 +715,7 @@ export class DiskFileSystemProvider implements Disposable,
         copiedSources[source] = true; // remember as copied
 
         // Create folder
-        this.mkdirp(target, fileStat.mode & 511);
+        await this.mkdirp(target, fileStat.mode & 511);
 
         // Copy each file recursively
         const files = await promisify(readdir)(source);

@@ -1,25 +1,27 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, postConstruct } from 'inversify';
-import { remote } from '../../../shared/electron';
-import { NewWindowOptions } from '../../browser/window/window-service';
+import { NewWindowOptions, WindowSearchParams } from '../../common/window';
 import { DefaultWindowService } from '../../browser/window/default-window-service';
 import { ElectronMainWindowService } from '../../electron-common/electron-main-window-service';
 import { ElectronWindowPreferences } from './electron-window-preferences';
+import { ConnectionCloseService } from '../../common/messaging/connection-management';
+import { FrontendIdProvider } from '../../browser/messaging/frontend-id-provider';
+import { WindowReloadOptions } from '../../browser/window/window-service';
 
 @injectable()
 export class ElectronWindowService extends DefaultWindowService {
@@ -34,17 +36,30 @@ export class ElectronWindowService extends DefaultWindowService {
      */
     protected closeOnUnload: boolean = false;
 
+    @inject(FrontendIdProvider)
+    protected readonly frontendIdProvider: FrontendIdProvider;
+
     @inject(ElectronMainWindowService)
     protected readonly delegate: ElectronMainWindowService;
 
     @inject(ElectronWindowPreferences)
     protected readonly electronWindowPreferences: ElectronWindowPreferences;
 
-    openNewWindow(url: string, { external }: NewWindowOptions = {}): undefined {
+    @inject(ConnectionCloseService)
+    protected readonly connectionCloseService: ConnectionCloseService;
+
+    override openNewWindow(url: string, { external }: NewWindowOptions = {}): undefined {
         this.delegate.openNewWindow(url, { external });
         return undefined;
     }
 
+    override openNewDefaultWindow(params?: WindowSearchParams): void {
+        this.delegate.openNewDefaultWindow(params);
+    }
+
+    override focus(): void {
+        window.electronTheiaCore.focusWindow();
+    }
     @postConstruct()
     protected init(): void {
         // Update the default zoom level on startup when the preferences event is fired.
@@ -53,61 +68,42 @@ export class ElectronWindowService extends DefaultWindowService {
                 this.updateWindowZoomLevel();
             }
         });
-    }
-
-    registerUnloadListeners(): void {
-        window.addEventListener('beforeunload', event => {
-            if (this.isUnloading) {
-                // Unloading process ongoing, do nothing:
-                return this.preventUnload(event);
-            } else if (this.closeOnUnload || this.canUnload()) {
-                // Let the window close and notify clients:
-                delete event.returnValue;
-                this.onUnloadEmitter.fire();
-                return;
-            } else {
-                this.isUnloading = true;
-                // Fix https://github.com/eclipse-theia/theia/issues/8186#issuecomment-742624480
-                // On Electron/Linux doing `showMessageBoxSync` does not seems to block the closing
-                // process long enough and closes the window no matter what you click on (yes/no).
-                // Instead we'll prevent closing right away, ask for confirmation and finally close.
-                setTimeout(() => {
-                    if (this.shouldUnload()) {
-                        this.closeOnUnload = true;
-                        window.close();
-                    }
-                    this.isUnloading = false;
-                });
-                return this.preventUnload(event);
-            }
+        window.electronTheiaCore.onAboutToClose(() => {
+            this.connectionCloseService.markForClose(this.frontendIdProvider.getId());
         });
     }
 
-    /**
-     * When preventing `beforeunload` on Electron, no popup is shown.
-     *
-     * This method implements a modal to ask the user if he wants to quit the page.
-     */
-    protected shouldUnload(): boolean {
-        const electronWindow = remote.getCurrentWindow();
-        const response = remote.dialog.showMessageBoxSync(electronWindow, {
-            type: 'question',
-            buttons: ['Yes', 'No'],
-            title: 'Confirm',
-            message: 'Are you sure you want to quit?',
-            detail: 'Any unsaved changes will not be saved.'
+    protected override registerUnloadListeners(): void {
+        window.electronTheiaCore.setCloseRequestHandler(reason => this.isSafeToShutDown(reason));
+        window.addEventListener('unload', () => {
+            this.onUnloadEmitter.fire();
         });
-        return response === 0; // 'Yes', close the window.
     }
 
     /**
      * Updates the window zoom level based on the preference value.
      */
-    protected updateWindowZoomLevel(): void {
+    protected async updateWindowZoomLevel(): Promise<void> {
         const preferredZoomLevel = this.electronWindowPreferences['window.zoomLevel'];
-        const webContents = remote.getCurrentWindow().webContents;
-        if (webContents.getZoomLevel() !== preferredZoomLevel) {
-            webContents.setZoomLevel(preferredZoomLevel);
+        if (await window.electronTheiaCore.getZoomLevel() !== preferredZoomLevel) {
+            window.electronTheiaCore.setZoomLevel(preferredZoomLevel);
+        }
+    }
+
+    override reload(params?: WindowReloadOptions): void {
+        if (params) {
+            const newLocation = new URL(location.href);
+            if (params.search) {
+                const query = Object.entries(params.search).map(([name, value]) => `${name}=${value}`).join('&');
+                newLocation.search = query;
+            }
+            if (params.hash) {
+                newLocation.hash = '#' + params.hash;
+            }
+            location.assign(newLocation);
+        } else {
+            window.electronTheiaCore.requestReload();
         }
     }
 }
+

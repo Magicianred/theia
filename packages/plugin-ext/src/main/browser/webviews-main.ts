@@ -1,35 +1,36 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import debounce = require('@theia/core/shared/lodash.debounce');
 import { URI } from '@theia/core/shared/vscode-uri';
 import { interfaces } from '@theia/core/shared/inversify';
 import { WebviewsMain, MAIN_RPC_CONTEXT, WebviewsExt, WebviewPanelViewState } from '../../common/plugin-api-rpc';
 import { RPCProtocol } from '../../common/rpc-protocol';
-import { WebviewOptions, WebviewPanelOptions, WebviewPanelShowOptions } from '@theia/plugin';
+import { ViewBadge, WebviewOptions, WebviewPanelOptions, WebviewPanelShowOptions } from '@theia/plugin';
 import { ApplicationShell } from '@theia/core/lib/browser/shell/application-shell';
 import { WebviewWidget, WebviewWidgetIdentifier } from './webview/webview';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
-import { ViewColumnService } from './view-column-service';
+import { ViewColumnService } from '@theia/core/lib/browser/shell/view-column-service';
 import { WidgetManager } from '@theia/core/lib/browser/widget-manager';
 import { JSONExt } from '@theia/core/shared/@phosphor/coreutils';
 import { Mutable } from '@theia/core/lib/common/types';
 import { HostedPluginSupport } from '../../hosted/browser/hosted-plugin';
 import { IconUrl } from '../../common/plugin-protocol';
 import { CustomEditorWidget } from './custom-editors/custom-editor-widget';
+import { ViewColumn, WebviewPanelTargetArea } from '../../plugin/types-impl';
 
 export class WebviewsMainImpl implements WebviewsMain, Disposable {
 
@@ -62,14 +63,15 @@ export class WebviewsMainImpl implements WebviewsMain, Disposable {
         showOptions: WebviewPanelShowOptions,
         options: WebviewPanelOptions & WebviewOptions
     ): Promise<void> {
-        const view = await this.widgetManager.getOrCreateWidget<WebviewWidget>(WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id: panelId });
+        const view = await this.widgetManager.getOrCreateWidget<WebviewWidget>(WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id: panelId, viewId: viewType });
         this.hookWebview(view);
         view.viewType = viewType;
         view.title.label = title;
-        const { enableFindWidget, retainContextWhenHidden, enableScripts, localResourceRoots, ...contentOptions } = options;
+        const { enableFindWidget, retainContextWhenHidden, enableScripts, enableForms, localResourceRoots, ...contentOptions } = options;
         view.options = { enableFindWidget, retainContextWhenHidden };
         view.setContentOptions({
             allowScripts: enableScripts,
+            allowForms: enableForms,
             localResourceRoots: localResourceRoots && localResourceRoots.map(root => root.toString()),
             ...contentOptions
         });
@@ -89,12 +91,14 @@ export class WebviewsMainImpl implements WebviewsMain, Disposable {
     }
 
     addOrReattachWidget(widget: WebviewWidget, showOptions: WebviewPanelShowOptions): void {
-        const widgetOptions: ApplicationShell.WidgetOptions = { area: showOptions.area ? showOptions.area : 'main' };
-
+        const area = showOptions.area ? showOptions.area : WebviewPanelTargetArea.Main;
+        const widgetOptions: ApplicationShell.WidgetOptions = { area };
         let mode = 'open-to-right';
-        if (showOptions.viewColumn === -2) {
-            const ref = this.shell.currentWidget;
-            if (ref && this.shell.getAreaFor(ref) === widgetOptions.area) {
+        const canOpenBeside = showOptions.viewColumn === ViewColumn.Beside && (area === WebviewPanelTargetArea.Main || area === WebviewPanelTargetArea.Bottom);
+        if (canOpenBeside) {
+            const activeOrRightmostTabbar = this.shell.getTabBarFor(area);
+            const ref = activeOrRightmostTabbar?.currentTitle?.owner;
+            if (ref) {
                 Object.assign(widgetOptions, { ref, mode });
             }
         } else if (widgetOptions.area === 'main' && showOptions.viewColumn !== undefined) {
@@ -156,6 +160,14 @@ export class WebviewsMainImpl implements WebviewsMain, Disposable {
         webview.title.label = value;
     }
 
+    async $setBadge(handle: string, badge: ViewBadge | undefined): Promise<void> {
+        const webview = await this.getWebview(handle);
+        if (webview) {
+            webview.badge = badge?.value;
+            webview.badgeTooltip = badge?.tooltip;
+        }
+    }
+
     async $setIconPath(handle: string, iconUrl: IconUrl | undefined): Promise<void> {
         const webview = await this.getWebview(handle);
         webview.setIconUrl(iconUrl);
@@ -168,9 +180,10 @@ export class WebviewsMainImpl implements WebviewsMain, Disposable {
 
     async $setOptions(handle: string, options: WebviewOptions): Promise<void> {
         const webview = await this.getWebview(handle);
-        const { enableScripts, localResourceRoots, ...contentOptions } = options;
+        const { enableScripts, enableForms, localResourceRoots, ...contentOptions } = options;
         webview.setContentOptions({
             allowScripts: enableScripts,
+            allowForms: enableForms,
             localResourceRoots: localResourceRoots && localResourceRoots.map(root => root.toString()),
             ...contentOptions
         });
@@ -207,10 +220,11 @@ export class WebviewsMainImpl implements WebviewsMain, Disposable {
         }
 
         const options = widget.options;
-        const { allowScripts, localResourceRoots, ...contentOptions } = widget.contentOptions;
+        const { allowScripts, allowForms, localResourceRoots, ...contentOptions } = widget.contentOptions;
         this.updateViewState(widget);
         await this.proxy.$deserializeWebviewPanel(handle, widget.viewType, title, state, widget.viewState, {
             enableScripts: allowScripts,
+            enableForms: allowForms,
             localResourceRoots: localResourceRoots && localResourceRoots.map(root => URI.parse(root)),
             ...contentOptions,
             ...options
@@ -255,7 +269,12 @@ export class WebviewsMainImpl implements WebviewsMain, Disposable {
     }
 
     private async tryGetWebview(id: string): Promise<WebviewWidget | undefined> {
-        const webview = await this.widgetManager.getWidget<WebviewWidget>(WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id })
+        const webview = await this.widgetManager.findWidget<WebviewWidget>(WebviewWidget.FACTORY_ID, options => {
+            if (options) {
+                return options.id === id;
+            }
+            return false;
+        })
             || await this.widgetManager.getWidget<CustomEditorWidget>(CustomEditorWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id });
         return webview;
     }

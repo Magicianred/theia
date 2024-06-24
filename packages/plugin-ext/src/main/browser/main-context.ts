@@ -1,24 +1,24 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 import { interfaces } from '@theia/core/shared/inversify';
 import { CommandRegistryMainImpl } from './command-registry-main';
 import { PreferenceRegistryMainImpl } from './preference-registry-main';
 import { QuickOpenMainImpl } from './quick-open-main';
 import { RPCProtocol } from '../../common/rpc-protocol';
-import { PLUGIN_RPC_CONTEXT, LanguagesMainFactory, OutputChannelRegistryFactory } from '../../common/plugin-api-rpc';
+import { PLUGIN_RPC_CONTEXT, LanguagesMainFactory, OutputChannelRegistryFactory, MAIN_RPC_CONTEXT } from '../../common/plugin-api-rpc';
 import { MessageRegistryMainImpl } from './message-registry-main';
 import { WindowStateMain } from './window-state-main';
 import { WorkspaceMainImpl } from './workspace-main';
@@ -29,7 +29,7 @@ import { TerminalServiceMainImpl } from './terminal-main';
 import { DialogsMainImpl } from './dialogs-main';
 import { TreeViewsMainImpl } from './view/tree-views-main';
 import { NotificationMainImpl } from './notification-main';
-import { ConnectionMainImpl } from './connection-main';
+import { ConnectionImpl } from '../../common/connection';
 import { WebviewsMainImpl } from './webviews-main';
 import { TasksMainImpl } from './tasks-main';
 import { StorageMainImpl } from './plugin-storage';
@@ -40,14 +40,9 @@ import { DecorationsMainImpl } from './decorations/decorations-main';
 import { ClipboardMainImpl } from './clipboard-main';
 import { DocumentsMainImpl } from './documents-main';
 import { TextEditorsMainImpl } from './text-editors-main';
-import { EditorManager } from '@theia/editor/lib/browser';
 import { EditorModelService } from './text-editor-model-service';
 import { OpenerService } from '@theia/core/lib/browser/opener-service';
 import { ApplicationShell } from '@theia/core/lib/browser/shell/application-shell';
-import { MonacoBulkEditService } from '@theia/monaco/lib/browser/monaco-bulk-edit-service';
-import { MonacoEditorService } from '@theia/monaco/lib/browser/monaco-editor-service';
-import { UntitledResourceResolver } from './editor/untitled-resource';
-import { FileResourceResolver } from '@theia/filesystem/lib/browser';
 import { MainFileSystemEventService } from './main-file-system-event-service';
 import { LabelServiceMainImpl } from './label-service-main';
 import { TimelineMainImpl } from './timeline-main';
@@ -55,6 +50,20 @@ import { AuthenticationMainImpl } from './authentication-main';
 import { ThemingMainImpl } from './theming-main';
 import { CommentsMainImp } from './comments/comments-main';
 import { CustomEditorsMainImpl } from './custom-editors/custom-editors-main';
+import { SecretsMainImpl } from './secrets-main';
+import { WebviewViewsMainImpl } from './webview-views/webview-views-main';
+import { MonacoLanguages } from '@theia/monaco/lib/browser/monaco-languages';
+import { UntitledResourceResolver } from '@theia/core/lib/common/resource';
+import { ThemeService } from '@theia/core/lib/browser/theming';
+import { TabsMainImpl } from './tabs/tabs-main';
+import { NotebooksMainImpl } from './notebooks/notebooks-main';
+import { LocalizationMainImpl } from './localization-main';
+import { NotebookRenderersMainImpl } from './notebooks/notebook-renderers-main';
+import { NotebookEditorsMainImpl } from './notebooks/notebook-editors-main';
+import { NotebookDocumentsMainImpl } from './notebooks/notebook-documents-main';
+import { NotebookKernelsMainImpl } from './notebooks/notebook-kernels-main';
+import { NotebooksAndEditorsMain } from './notebooks/notebook-documents-and-editors-main';
+import { TestingMainImpl } from './test-main';
 
 export function setUpPluginApi(rpc: RPCProtocol, container: interfaces.Container): void {
     const authenticationMain = new AuthenticationMainImpl(rpc, container);
@@ -78,20 +87,31 @@ export function setUpPluginApi(rpc: RPCProtocol, container: interfaces.Container
     const preferenceRegistryMain = new PreferenceRegistryMainImpl(rpc, container);
     rpc.set(PLUGIN_RPC_CONTEXT.PREFERENCE_REGISTRY_MAIN, preferenceRegistryMain);
 
-    const editorsAndDocuments = new EditorsAndDocumentsMain(rpc, container);
+    const tabsMain = new TabsMainImpl(rpc, container);
+    rpc.set(PLUGIN_RPC_CONTEXT.TABS_MAIN, tabsMain);
+
+    const editorsAndDocuments = new EditorsAndDocumentsMain(rpc, container, tabsMain);
+
+    const notebookDocumentsMain = new NotebookDocumentsMainImpl(rpc, container);
+    rpc.set(PLUGIN_RPC_CONTEXT.NOTEBOOK_DOCUMENTS_MAIN, notebookDocumentsMain);
 
     const modelService = container.get(EditorModelService);
-    const editorManager = container.get(EditorManager);
     const openerService = container.get<OpenerService>(OpenerService);
     const shell = container.get(ApplicationShell);
     const untitledResourceResolver = container.get(UntitledResourceResolver);
-    const fileResourceResolver = container.get(FileResourceResolver);
-    const documentsMain = new DocumentsMainImpl(editorsAndDocuments, modelService, rpc, editorManager, openerService, shell, untitledResourceResolver, fileResourceResolver);
+    const languageService = container.get(MonacoLanguages);
+    const documentsMain = new DocumentsMainImpl(editorsAndDocuments, notebookDocumentsMain, modelService, rpc,
+        openerService, shell, untitledResourceResolver, languageService);
     rpc.set(PLUGIN_RPC_CONTEXT.DOCUMENTS_MAIN, documentsMain);
 
-    const bulkEditService = container.get(MonacoBulkEditService);
-    const monacoEditorService = container.get(MonacoEditorService);
-    const editorsMain = new TextEditorsMainImpl(editorsAndDocuments, rpc, bulkEditService, monacoEditorService);
+    rpc.set(PLUGIN_RPC_CONTEXT.NOTEBOOKS_MAIN, new NotebooksMainImpl(rpc, container, commandRegistryMain));
+    rpc.set(PLUGIN_RPC_CONTEXT.NOTEBOOK_RENDERERS_MAIN, new NotebookRenderersMainImpl(rpc, container));
+    const notebookEditorsMain = new NotebookEditorsMainImpl(rpc, container);
+    rpc.set(PLUGIN_RPC_CONTEXT.NOTEBOOK_EDITORS_MAIN, notebookEditorsMain);
+    rpc.set(PLUGIN_RPC_CONTEXT.NOTEBOOK_DOCUMENTS_AND_EDITORS_MAIN, new NotebooksAndEditorsMain(rpc, container, notebookDocumentsMain, notebookEditorsMain));
+    rpc.set(PLUGIN_RPC_CONTEXT.NOTEBOOK_KERNELS_MAIN, new NotebookKernelsMainImpl(rpc, container));
+
+    const editorsMain = new TextEditorsMainImpl(editorsAndDocuments, documentsMain, rpc, container);
     rpc.set(PLUGIN_RPC_CONTEXT.TEXT_EDITORS_MAIN, editorsMain);
 
     // start listening only after all clients are subscribed to events
@@ -105,6 +125,9 @@ export function setUpPluginApi(rpc: RPCProtocol, container: interfaces.Container
 
     const notificationMain = new NotificationMainImpl(rpc, container);
     rpc.set(PLUGIN_RPC_CONTEXT.NOTIFICATION_MAIN, notificationMain);
+
+    const testingMain = new TestingMainImpl(rpc, container, commandRegistryMain);
+    rpc.set(PLUGIN_RPC_CONTEXT.TESTING_MAIN, testingMain);
 
     const terminalMain = new TerminalServiceMainImpl(rpc, container);
     rpc.set(PLUGIN_RPC_CONTEXT.TERMINAL_MAIN, terminalMain);
@@ -126,10 +149,13 @@ export function setUpPluginApi(rpc: RPCProtocol, container: interfaces.Container
     const customEditorsMain = new CustomEditorsMainImpl(rpc, container, webviewsMain);
     rpc.set(PLUGIN_RPC_CONTEXT.CUSTOM_EDITORS_MAIN, customEditorsMain);
 
+    const webviewViewsMain = new WebviewViewsMainImpl(rpc, container, webviewsMain);
+    rpc.set(PLUGIN_RPC_CONTEXT.WEBVIEW_VIEWS_MAIN, webviewViewsMain);
+
     const storageMain = new StorageMainImpl(container);
     rpc.set(PLUGIN_RPC_CONTEXT.STORAGE_MAIN, storageMain);
 
-    const connectionMain = new ConnectionMainImpl(rpc);
+    const connectionMain = new ConnectionImpl(rpc.getProxy(MAIN_RPC_CONTEXT.CONNECTION_EXT));
     rpc.set(PLUGIN_RPC_CONTEXT.CONNECTION_MAIN, connectionMain);
 
     const tasksMain = new TasksMainImpl(rpc, container);
@@ -151,6 +177,9 @@ export function setUpPluginApi(rpc: RPCProtocol, container: interfaces.Container
     const scmMain = new ScmMainImpl(rpc, container);
     rpc.set(PLUGIN_RPC_CONTEXT.SCM_MAIN, scmMain);
 
+    const secretsMain = new SecretsMainImpl(rpc, container);
+    rpc.set(PLUGIN_RPC_CONTEXT.SECRETS_MAIN, secretsMain);
+
     const decorationsMain = new DecorationsMainImpl(rpc, container);
     rpc.set(PLUGIN_RPC_CONTEXT.DECORATIONS_MAIN, decorationsMain);
 
@@ -166,9 +195,12 @@ export function setUpPluginApi(rpc: RPCProtocol, container: interfaces.Container
     const timelineMain = new TimelineMainImpl(rpc, container);
     rpc.set(PLUGIN_RPC_CONTEXT.TIMELINE_MAIN, timelineMain);
 
-    const themingMain = new ThemingMainImpl(rpc);
+    const themingMain = new ThemingMainImpl(rpc, container.get(ThemeService));
     rpc.set(PLUGIN_RPC_CONTEXT.THEMING_MAIN, themingMain);
 
     const commentsMain = new CommentsMainImp(rpc, container);
     rpc.set(PLUGIN_RPC_CONTEXT.COMMENTS_MAIN, commentsMain);
+
+    const localizationMain = new LocalizationMainImpl(container);
+    rpc.set(PLUGIN_RPC_CONTEXT.LOCALIZATION_MAIN, localizationMain);
 }

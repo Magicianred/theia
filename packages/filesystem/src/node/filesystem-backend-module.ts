@@ -1,26 +1,25 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as path from 'path';
 import { ContainerModule, interfaces } from '@theia/core/shared/inversify';
-import { ConnectionHandler, JsonRpcConnectionHandler, ILogger } from '@theia/core/lib/common';
+import { ConnectionHandler, RpcConnectionHandler, ILogger } from '@theia/core/lib/common';
 import { FileSystemWatcherServer, FileSystemWatcherService } from '../common/filesystem-watcher-protocol';
 import { FileSystemWatcherServerClient } from './filesystem-watcher-client';
 import { NsfwFileSystemWatcherService, NsfwFileSystemWatcherServerOptions } from './nsfw-watcher/nsfw-filesystem-service';
-import { MessagingService } from '@theia/core/lib/node/messaging/messaging-service';
 import { NodeFileUploadService } from './node-file-upload-service';
 import { NsfwOptions } from './nsfw-watcher/nsfw-options';
 import { DiskFileSystemProvider } from './disk-file-system-provider';
@@ -29,8 +28,8 @@ import {
 } from '../common/remote-file-system-provider';
 import { FileSystemProvider } from '../common/files';
 import { EncodingService } from '@theia/core/lib/common/encoding-service';
-import { IPCConnectionProvider } from '@theia/core/lib/node';
-import { JsonRpcProxyFactory, ConnectionErrorHandler } from '@theia/core';
+import { BackendApplicationContribution, IPCConnectionProvider } from '@theia/core/lib/node';
+import { RpcProxyFactory, ConnectionErrorHandler } from '@theia/core';
 import { FileSystemWatcherServiceDispatcher } from './filesystem-watcher-dispatcher';
 
 export const NSFW_SINGLE_THREADED = process.argv.includes('--no-cluster');
@@ -55,7 +54,7 @@ export default new ContainerModule(bind => {
     bind(FileSystemProviderServer).toSelf();
     bind(RemoteFileSystemServer).toService(FileSystemProviderServer);
     bind(ConnectionHandler).toDynamicValue(ctx =>
-        new JsonRpcConnectionHandler<RemoteFileSystemClient>(remoteFileSystemPath, client => {
+        new RpcConnectionHandler<RemoteFileSystemClient>(remoteFileSystemPath, client => {
             const server = ctx.container.get<RemoteFileSystemServer>(RemoteFileSystemServer);
             server.setClient(client);
             client.onDidCloseConnection(() => server.dispose());
@@ -63,7 +62,7 @@ export default new ContainerModule(bind => {
         }, RemoteFileSystemProxyFactory)
     ).inSingletonScope();
     bind(NodeFileUploadService).toSelf().inSingletonScope();
-    bind(MessagingService.Contribution).toService(NodeFileUploadService);
+    bind(BackendApplicationContribution).toService(NodeFileUploadService);
 });
 
 export function bindFileSystemWatcherServer(bind: interfaces.Bind): void {
@@ -74,9 +73,9 @@ export function bindFileSystemWatcherServer(bind: interfaces.Bind): void {
     bind(FileSystemWatcherServerClient).toSelf();
     bind(FileSystemWatcherServer).toService(FileSystemWatcherServerClient);
 
-    bind<NsfwFileSystemWatcherServiceProcessOptions>(NsfwFileSystemWatcherServiceProcessOptions).toConstantValue({
-        entryPoint: path.resolve(__dirname, 'nsfw-watcher'),
-    });
+    bind<NsfwFileSystemWatcherServiceProcessOptions>(NsfwFileSystemWatcherServiceProcessOptions).toDynamicValue(ctx => ({
+        entryPoint: path.join(__dirname, 'nsfw-watcher'),
+    })).inSingletonScope();
     bind<NsfwFileSystemWatcherServerOptions>(NsfwFileSystemWatcherServerOptions).toDynamicValue(ctx => {
         const logger = ctx.container.get<ILogger>(ILogger);
         const nsfwOptions = ctx.container.get<NsfwOptions>(NsfwOptions);
@@ -117,7 +116,7 @@ export function spawnNsfwFileSystemWatcherServiceProcess(ctx: interfaces.Context
     const logger = ctx.container.get<ILogger>(ILogger);
     const nsfwOptions = ctx.container.get<NsfwOptions>(NsfwOptions);
     const ipcConnectionProvider = ctx.container.get<IPCConnectionProvider>(IPCConnectionProvider);
-    const proxyFactory = new JsonRpcProxyFactory<FileSystemWatcherService>();
+    const proxyFactory = new RpcProxyFactory<FileSystemWatcherService>();
     const serverProxy = proxyFactory.createProxy();
     // We need to call `.setClient` before listening, else the JSON-RPC calls won't go through.
     serverProxy.setClient(dispatcher);

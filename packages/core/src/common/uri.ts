@@ -1,23 +1,33 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { URI as Uri } from 'vscode-uri';
 import { Path } from './path';
 
-export default class URI {
+export class URI {
+
+    public static fromComponents(components: UriComponents): URI;
+    public static fromComponents(components: undefined): undefined;
+    public static fromComponents(components: UriComponents | undefined): URI | undefined {
+        return components ? new URI(Uri.revive(components)) : undefined;
+    }
+
+    public static fromFilePath(path: string): URI {
+        return new URI(Uri.file(path));
+    }
 
     private readonly codeUri: Uri;
     private _path: Path | undefined;
@@ -41,7 +51,7 @@ export default class URI {
             return base;
         }
         if (this.path.isRoot) {
-            return this.path.toString();
+            return this.path.fsPath();
         }
         return '';
     }
@@ -76,6 +86,16 @@ export default class URI {
 
     resolve(path: string | Path): URI {
         return this.withPath(this.path.join(path.toString()));
+    }
+
+    /**
+     * @returns a new, absolute URI if one can be computed from the path segments passed in.
+     */
+    resolveToAbsolute(...pathSegments: Array<string | Path>): URI | undefined {
+        const absolutePath = this.path.resolve(...pathSegments.map(path => path.toString()));
+        if (absolutePath) {
+            return this.withPath(absolutePath);
+        }
     }
 
     /**
@@ -235,4 +255,25 @@ export default class URI {
     private hasSameOrigin(uri: URI): boolean {
         return (this.authority === uri.authority) && (this.scheme === uri.scheme);
     }
+
+    toComponents(): UriComponents {
+        return {
+            scheme: this.scheme,
+            authority: this.authority,
+            path: this.path.toString(),
+            query: this.query,
+            fragment: this.fragment
+        };
+    }
 }
+
+export interface UriComponents {
+    scheme: string;
+    authority: string;
+    path: string;
+    query: string;
+    fragment: string;
+    external?: string;
+}
+
+export default URI;

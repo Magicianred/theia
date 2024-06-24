@@ -1,30 +1,30 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as os from 'os';
 import * as fs from '@theia/core/shared/fs-extra';
 import * as path from 'path';
-import { v4 } from 'uuid';
+import { generateUuid } from '@theia/core/lib/common/uuid';
 import { Request, Response } from '@theia/core/shared/express';
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { OK, BAD_REQUEST, METHOD_NOT_ALLOWED, NOT_FOUND, INTERNAL_SERVER_ERROR, REQUESTED_RANGE_NOT_SATISFIABLE, PARTIAL_CONTENT } from 'http-status-codes';
 import URI from '@theia/core/lib/common/uri';
 import { isEmpty } from '@theia/core/lib/common/objects';
 import { ILogger } from '@theia/core/lib/common/logger';
-import { FileUri } from '@theia/core/lib/node/file-uri';
+import { FileUri } from '@theia/core/lib/common/file-uri';
 import { DirectoryArchiver } from './directory-archiver';
 import { FileDownloadData } from '../../common/download/file-download-data';
 import { FileDownloadCache, DownloadStorageItem } from './file-download-cache';
@@ -135,12 +135,12 @@ export abstract class FileDownloadHandler {
             end: (isNaN(end) || end > statSize - 1) ? (statSize - 1) : end
         };
     }
-    protected async archive(inputPath: string, outputPath: string = path.join(os.tmpdir(), v4()), entries?: string[]): Promise<string> {
+    protected async archive(inputPath: string, outputPath: string = path.join(os.tmpdir(), generateUuid()), entries?: string[]): Promise<string> {
         await this.directoryArchiver.archive(inputPath, outputPath, entries);
         return outputPath;
     }
 
-    protected async createTempDir(downloadId: string = v4()): Promise<string> {
+    protected async createTempDir(downloadId: string = generateUuid()): Promise<string> {
         const outputPath = path.join(os.tmpdir(), downloadId);
         await fs.mkdir(outputPath);
         return outputPath;
@@ -221,7 +221,7 @@ export class SingleFileDownloadHandler extends FileDownloadHandler {
             return;
         }
         try {
-            const downloadId = v4();
+            const downloadId = generateUuid();
             const options: PrepareDownloadOptions = { filePath, downloadId, remove: false };
             if (!stat.isDirectory()) {
                 await this.prepareDownload(request, response, options);
@@ -271,7 +271,7 @@ export class MultiFileDownloadHandler extends FileDownloadHandler {
             }
         }
         try {
-            const downloadId = v4();
+            const downloadId = generateUuid();
             const outputRootPath = await this.createTempDir(downloadId);
             const distinctUris = Array.from(new Set(body.uris.map(uri => new URI(uri))));
             const tarPaths = [];

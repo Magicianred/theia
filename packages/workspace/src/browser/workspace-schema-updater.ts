@@ -1,25 +1,26 @@
-/********************************************************************************
- * Copyright (C) 2021 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2021 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { JsonSchemaContribution, JsonSchemaRegisterContext } from '@theia/core/lib/browser/json-schema-store';
-import { InMemoryResources } from '@theia/core/lib/common';
+import { InMemoryResources, isArray, isObject } from '@theia/core/lib/common';
 import { IJSONSchema } from '@theia/core/lib/common/json-schema';
 import URI from '@theia/core/lib/common/uri';
 import { Deferred } from '@theia/core/lib/common/promise-util';
+import { WorkspaceFileService } from '../common';
 
 export interface SchemaUpdateMessage {
     key: string,
@@ -39,6 +40,7 @@ export class WorkspaceSchemaUpdater implements JsonSchemaContribution {
     protected safeToHandleQueue = new Deferred();
 
     @inject(InMemoryResources) protected readonly inmemoryResources: InMemoryResources;
+    @inject(WorkspaceFileService) protected readonly workspaceFileService: WorkspaceFileService;
 
     @postConstruct()
     protected init(): void {
@@ -48,7 +50,7 @@ export class WorkspaceSchemaUpdater implements JsonSchemaContribution {
 
     registerSchemas(context: JsonSchemaRegisterContext): void {
         context.registerSchema({
-            fileMatch: ['*.theia-workspace', '*.code-workspace'],
+            fileMatch: this.workspaceFileService.getWorkspaceFileExtensions(true),
             url: this.uri.toString()
         });
     }
@@ -114,13 +116,11 @@ export class WorkspaceSchemaUpdater implements JsonSchemaContribution {
 export type WorkspaceSchema = Required<Pick<IJSONSchema, 'properties' | 'required'>>;
 
 export namespace WorkspaceSchema {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    export const is = (candidate: any): candidate is WorkspaceSchema => !!candidate
-        && typeof candidate === 'object'
-        && 'properties' in candidate
-        && typeof candidate.properties === 'object'
-        && 'required' in candidate
-        && Array.isArray(candidate.required);
+    export function is(candidate: unknown): candidate is WorkspaceSchema {
+        return isObject<WorkspaceSchema>(candidate)
+            && typeof candidate.properties === 'object'
+            && isArray(candidate.required);
+    }
 }
 
 export const workspaceSchemaId = 'vscode://schemas/workspace';
@@ -145,4 +145,6 @@ export const workspaceSchema: IJSONSchema = {
             }
         }
     },
+    allowComments: true,
+    allowTrailingCommas: true,
 };

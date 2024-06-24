@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2020 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import {
     Range,
@@ -23,7 +23,7 @@ import {
     CommentThreadChangedEvent
 } from '../../../common/plugin-api-rpc-model';
 import { Event, Emitter } from '@theia/core/lib/common/event';
-import { CommentThreadCollapsibleState } from '../../../plugin/types-impl';
+import { CommentThreadCollapsibleState, CommentThreadState } from '../../../plugin/types-impl';
 import {
     CommentProviderFeatures,
     CommentsExt,
@@ -38,7 +38,7 @@ import { URI } from '@theia/core/shared/vscode-uri';
 import { CancellationToken } from '@theia/core/lib/common';
 import { RPCProtocol } from '../../../common/rpc-protocol';
 import { interfaces } from '@theia/core/shared/inversify';
-import { v4 as uuidv4 } from 'uuid';
+import { generateUuid } from '@theia/core/lib/common/uuid';
 import { CommentsContribution } from './comments-contribution';
 
 /*---------------------------------------------------------------------------------------------
@@ -124,10 +124,38 @@ export class CommentThreadImpl implements CommentThread, Disposable {
     private readonly onDidChangeCollapsibleStateEmitter = new Emitter<CommentThreadCollapsibleState | undefined>();
     readonly onDidChangeCollapsibleState = this.onDidChangeCollapsibleStateEmitter.event;
 
+    private _state: CommentThreadState | undefined;
+    get state(): CommentThreadState | undefined {
+        return this._state;
+    }
+
+    set state(newState: CommentThreadState | undefined) {
+        if (this._state !== newState) {
+            this._state = newState;
+            this.onDidChangeStateEmitter.fire(this._state);
+        }
+    }
+
+    private readonly onDidChangeStateEmitter = new Emitter<CommentThreadState | undefined>();
+    readonly onDidChangeState = this.onDidChangeStateEmitter.event;
+
+    private readonly onDidChangeCanReplyEmitter = new Emitter<boolean>();
+    readonly onDidChangeCanReply = this.onDidChangeCanReplyEmitter.event;
+
     private _isDisposed: boolean;
 
     get isDisposed(): boolean {
         return this._isDisposed;
+    }
+
+    private _canReply: boolean = true;
+    get canReply(): boolean {
+        return this._canReply;
+    }
+
+    set canReply(canReply: boolean) {
+        this._canReply = canReply;
+        this.onDidChangeCanReplyEmitter.fire(this._canReply);
     }
 
     constructor(
@@ -150,15 +178,19 @@ export class CommentThreadImpl implements CommentThread, Disposable {
         if (modified('contextValue')) { this._contextValue = changes.contextValue; }
         if (modified('comments')) { this._comments = changes.comments; }
         if (modified('collapseState')) { this._collapsibleState = changes.collapseState; }
+        if (modified('state')) { this._state = changes.state; }
+        if (modified('canReply')) { this._canReply = changes.canReply!; }
     }
 
     dispose(): void {
         this._isDisposed = true;
         this.onDidChangeCollapsibleStateEmitter.dispose();
+        this.onDidChangeStateEmitter.dispose();
         this.onDidChangeCommentsEmitter.dispose();
         this.onDidChangeInputEmitter.dispose();
         this.onDidChangeLabelEmitter.dispose();
         this.onDidChangeRangeEmitter.dispose();
+        this.onDidChangeCanReplyEmitter.dispose();
     }
 }
 
@@ -360,7 +392,7 @@ export class CommentsMainImp implements CommentsMain {
     }
 
     $registerCommentController(handle: number, id: string, label: string): void {
-        const providerId = uuidv4();
+        const providerId = generateUuid();
         this.handlers.set(handle, providerId);
 
         const provider = new CommentController(this.proxy, this.commentService, handle, providerId, id, label, {});

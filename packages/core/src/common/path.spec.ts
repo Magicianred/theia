@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as assert from 'assert';
 import { Path } from './path';
@@ -257,6 +257,20 @@ describe('Path', () => {
         });
     }
 
+    describe('Normalize path separator', () => {
+        it('should handle windows styled paths', async () => {
+            const path = 'C:\\a\\b\\c';
+            const expected = '/c:/a/b/c';
+            expect(new Path(path).toString()).eq(expected);
+        });
+
+        it('should prefix drive letter with /', async () => {
+            const path = 'c:/a/b/c';
+            const expected = '/c:/a/b/c';
+            expect(new Path(path).toString()).eq(expected);
+        });
+    });
+
     const linuxHome = '/home/test-user';
     const windowsHome = '/C:/Users/test-user';
 
@@ -340,5 +354,62 @@ describe('Path', () => {
             const expected = '~/a/b/theia';
             expect(Path.untildify(path, '')).eq(expected);
         });
+
     });
+
+    describe('fsPath#windows', () => {
+        it('should retain windows style path', () => {
+            const path = 'C:\\path\\to\\file.txt';
+            expect(new Path(path).fsPath(Path.Format.Windows)).eq(path);
+        });
+
+        it('should create windows style path with slashes', () => {
+            const path = 'C:/path/to/file.txt';
+            const expected = 'C:\\path\\to\\file.txt';
+            expect(new Path(path).fsPath(Path.Format.Windows)).eq(expected);
+        });
+
+        it('should append slashes to drive letter', () => {
+            const path = 'C:';
+            const expected = 'C:\\';
+            expect(new Path(path).fsPath(Path.Format.Windows)).eq(expected);
+        });
+
+        it('should create windows style path from posix', () => {
+            const path = '/path/to/file.txt';
+            const expected = '\\path\\to\\file.txt';
+            expect(new Path(path).fsPath(Path.Format.Windows)).eq(expected);
+        });
+    });
+
+    describe('fsPath#posix', () => {
+        it('should retain posix style path', () => {
+            const path = '/path/to/file.txt';
+            expect(new Path(path).fsPath(Path.Format.Posix)).eq(path);
+        });
+
+        it('should create posix style path from windows with slashes', () => {
+            const path = 'C:/path/to/file.txt';
+            const expected = '/c:/path/to/file.txt';
+            expect(new Path(path).fsPath(Path.Format.Posix)).eq(expected);
+        });
+
+        it('should create posix style path from windows', () => {
+            const path = 'C:\\path\\to\\file.txt';
+            const expected = '/c:/path/to/file.txt';
+            expect(new Path(path).fsPath(Path.Format.Posix)).eq(expected);
+        });
+    });
+
+    function checkResolution(original: string, segments: string[], expected: string | undefined): void {
+        it(`should resolve ${original} and ${segments.join(', ')} to ${expected}`, () => {
+            const start = new Path(original);
+            const result = start.resolve(...segments);
+            expect(result?.toString()).eq(expected);
+        });
+    }
+
+    checkResolution('a/b/c', ['/d/e/f'], '/d/e/f');
+    checkResolution('a/b/c', ['../d/e/f'], undefined);
+    checkResolution('/a/b/c', ['../d', 'e', './f'], '/a/b/d/e/f');
 });

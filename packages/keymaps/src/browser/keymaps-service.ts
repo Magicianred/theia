@@ -1,23 +1,23 @@
-/********************************************************************************
- * Copyright (C) 2017 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { OpenerService, open, WidgetOpenerOptions, Widget } from '@theia/core/lib/browser';
-import { KeybindingRegistry, KeybindingScope } from '@theia/core/lib/browser/keybinding';
-import { Keybinding } from '@theia/core/lib/common/keybinding';
+import { KeybindingRegistry, KeybindingScope, ScopedKeybinding } from '@theia/core/lib/browser/keybinding';
+import { Keybinding, RawKeybinding } from '@theia/core/lib/common/keybinding';
 import { UserStorageUri } from '@theia/userstorage/lib/browser';
 import * as jsoncparser from 'jsonc-parser';
 import { Emitter } from '@theia/core/lib/common/event';
@@ -27,6 +27,7 @@ import { Deferred } from '@theia/core/lib/common/promise-util';
 import URI from '@theia/core/lib/common/uri';
 import { MonacoWorkspace } from '@theia/monaco/lib/browser/monaco-workspace';
 import { MessageService } from '@theia/core/lib/common/message-service';
+import { MonacoJSONCEditor } from '@theia/preferences/lib/browser/monaco-jsonc-editor';
 
 @injectable()
 export class KeymapsService {
@@ -46,6 +47,9 @@ export class KeymapsService {
     @inject(MessageService)
     protected readonly messageService: MessageService;
 
+    @inject(MonacoJSONCEditor)
+    protected readonly jsoncEditor: MonacoJSONCEditor;
+
     protected readonly changeKeymapEmitter = new Emitter<void>();
     readonly onDidChangeKeymaps = this.changeKeymapEmitter.event;
 
@@ -56,7 +60,11 @@ export class KeymapsService {
      * Initialize the keybinding service.
      */
     @postConstruct()
-    protected async init(): Promise<void> {
+    protected init(): void {
+        this.doInit();
+    }
+
+    protected async doInit(): Promise<void> {
         const reference = await this.textModelService.createModelReference(UserStorageUri.resolve('keymaps.json'));
         this.model = reference.object;
         this.deferredModel.resolve(this.model);
@@ -85,6 +93,8 @@ export class KeymapsService {
                     for (const value of json) {
                         if (Keybinding.is(value)) {
                             keybindings.push(value);
+                        } else if (RawKeybinding.is(value)) {
+                            keybindings.push(Keybinding.apiObjectify(value));
                         }
                     }
                 }
@@ -113,59 +123,67 @@ export class KeymapsService {
 
     /**
      * Set the keybinding in the JSON.
-     * @param newKeybinding the JSON keybindings.
+     * @param newKeybinding the new JSON keybinding
+     * @param oldKeybinding the old JSON keybinding
      */
-    async setKeybinding(newKeybinding: Keybinding, oldKeybinding: string | undefined): Promise<void> {
+    async setKeybinding(newKeybinding: Keybinding, oldKeybinding: ScopedKeybinding | undefined): Promise<void> {
         return this.updateKeymap(() => {
-            let newAdded = false;
-            let oldRemoved = false;
-            const keybindings = [];
-            for (let keybinding of this.keybindingRegistry.getKeybindingsByScope(KeybindingScope.USER)) {
-                if (Keybinding.equals(keybinding, newKeybinding, true, true)) {
-                    newAdded = true;
-                    keybinding = {
-                        ...keybinding,
-                        keybinding: newKeybinding.keybinding
-                    };
-                }
-                if (oldKeybinding && Keybinding.equals(keybinding, { ...newKeybinding, keybinding: oldKeybinding, command: '-' + newKeybinding.command }, false, true)) {
-                    oldRemoved = true;
-                }
-                keybindings.push(keybinding);
-            }
-            if (!newAdded) {
-                keybindings.push({
-                    command: newKeybinding.command,
-                    keybinding: newKeybinding.keybinding,
-                    context: newKeybinding.context,
-                    when: newKeybinding.when,
-                    args: newKeybinding.args
-                });
-                newAdded = true;
-            }
-            if (!oldRemoved && oldKeybinding) {
+            const keybindings: Keybinding[] = [...this.keybindingRegistry.getKeybindingsByScope(KeybindingScope.USER)];
+            if (!oldKeybinding) {
+                Keybinding.addKeybinding(keybindings, newKeybinding);
+                return keybindings;
+            } else if (oldKeybinding.scope === KeybindingScope.DEFAULT) {
+                Keybinding.addKeybinding(keybindings, newKeybinding);
                 const disabledBinding = {
-                    command: '-' + newKeybinding.command,
-                    // TODO key: oldKeybinding, see https://github.com/eclipse-theia/theia/issues/6879
-                    keybinding: oldKeybinding,
-                    context: newKeybinding.context,
-                    when: newKeybinding.when,
-                    args: newKeybinding.args
+                    ...oldKeybinding,
+                    command: '-' + oldKeybinding.command
                 };
-                // Add disablement of the old keybinding if it isn't already disabled in the list to avoid duplicate disabled entries
-                if (!keybindings.some(binding => Keybinding.equals(binding, disabledBinding, true, true))) {
-                    keybindings.push(disabledBinding);
-                }
-                oldRemoved = true;
-            }
-            if (newAdded || oldRemoved) {
+                Keybinding.addKeybinding(keybindings, disabledBinding);
+                return keybindings;
+            } else if (Keybinding.replaceKeybinding(keybindings, oldKeybinding, newKeybinding)) {
                 return keybindings;
             }
         });
     }
 
     /**
-     * Remove the given keybinding with the given command id from the JSON.
+     * Unset the given keybinding in the JSON.
+     * If the given keybinding has a default scope, it will be disabled in the JSON.
+     * Otherwise, it will be removed from the JSON.
+     * @param keybinding the keybinding to unset
+     */
+    unsetKeybinding(keybinding: ScopedKeybinding): Promise<void> {
+        return this.updateKeymap(() => {
+            const keybindings = this.keybindingRegistry.getKeybindingsByScope(KeybindingScope.USER);
+            if (keybinding.scope === KeybindingScope.DEFAULT) {
+                const result: Keybinding[] = [...keybindings];
+                const disabledBinding = {
+                    ...keybinding,
+                    command: '-' + keybinding.command
+                };
+                Keybinding.addKeybinding(result, disabledBinding);
+                return result;
+            } else {
+                const filtered = keybindings.filter(a => !Keybinding.equals(a, keybinding, false, true));
+                if (filtered.length !== keybindings.length) {
+                    return filtered;
+                }
+            }
+        });
+    }
+
+    /**
+     * Whether there is a keybinding with the given command id in the JSON.
+     * @param commandId the keybinding command id
+     */
+    hasKeybinding(commandId: string): boolean {
+        const keybindings = this.keybindingRegistry.getKeybindingsByScope(KeybindingScope.USER);
+        return keybindings.some(a => a.command === commandId);
+    }
+
+    /**
+     * Remove the keybindings with the given command id from the JSON.
+     * This includes disabled keybindings.
      * @param commandId the keybinding command id.
      */
     removeKeybinding(commandId: string): Promise<void> {
@@ -183,27 +201,8 @@ export class KeymapsService {
         const model = await this.deferredModel.promise;
         try {
             const keybindings = op();
-            if (keybindings) {
-                const content = model.getText().trim();
-                const textModel = model.textEditorModel;
-                const { insertSpaces, tabSize, defaultEOL } = textModel.getOptions();
-                const editOperations: monaco.editor.IIdentifiedSingleEditOperation[] = [];
-                for (const edit of jsoncparser.modify(content, [], keybindings.map(binding => Keybinding.apiObjectify(binding)), {
-                    formattingOptions: {
-                        insertSpaces,
-                        tabSize,
-                        eol: defaultEOL === monaco.editor.DefaultEndOfLine.LF ? '\n' : '\r\n'
-                    }
-                })) {
-                    const start = textModel.getPositionAt(edit.offset);
-                    const end = textModel.getPositionAt(edit.offset + edit.length);
-                    editOperations.push({
-                        range: monaco.Range.fromPositions(start, end),
-                        text: edit.content,
-                        forceMoveMarkers: false
-                    });
-                }
-                await this.workspace.applyBackgroundEdit(model, editOperations);
+            if (keybindings && this.model) {
+                await this.jsoncEditor.setValue(this.model, [], keybindings.map(binding => Keybinding.apiObjectify(binding)));
             }
         } catch (e) {
             const message = `Failed to update a keymap in '${model.uri}'.`;

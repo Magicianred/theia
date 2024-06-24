@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2020 RedHat and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 RedHat and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject } from '@theia/core/shared/inversify';
 import { CommandRegistry, MenuModelRegistry, MenuPath } from '@theia/core/lib/common';
@@ -34,39 +34,38 @@ export class TimelineTreeWidget extends TreeWidget {
 
     @inject(MenuModelRegistry) protected readonly menus: MenuModelRegistry;
     @inject(TimelineContextKeyService) protected readonly contextKeys: TimelineContextKeyService;
+    @inject(TimelineService) protected readonly timelineService: TimelineService;
+    @inject(CommandRegistry) protected readonly commandRegistry: CommandRegistry;
 
     constructor(
-        @inject(TreeProps) readonly props: TreeProps,
-        @inject(TimelineService) protected readonly timelineService: TimelineService,
-        @inject(TimelineTreeModel) readonly model: TimelineTreeModel,
-        @inject(ContextMenuRenderer) protected readonly contextMenuRenderer: ContextMenuRenderer,
-        @inject(CommandRegistry) protected readonly commandRegistry: CommandRegistry
+        @inject(TreeProps) props: TreeProps,
+        @inject(TimelineTreeModel) override readonly model: TimelineTreeModel,
+        @inject(ContextMenuRenderer) contextMenuRenderer: ContextMenuRenderer,
     ) {
         super(props, model, contextMenuRenderer);
         this.id = TimelineTreeWidget.ID;
         this.addClass('timeline-outer-container');
     }
 
-    protected renderNode(node: TimelineNode, props: NodeProps): React.ReactNode {
+    protected override renderNode(node: TimelineNode, props: NodeProps): React.ReactNode {
         const attributes = this.createNodeAttributes(node, props);
         const content = <TimelineItemNode
             timelineItem={node.timelineItem}
             commandRegistry={this.commandRegistry}
             contextKeys={this.contextKeys}
-            contextMenuRenderer={this.contextMenuRenderer}/>;
+            contextMenuRenderer={this.contextMenuRenderer} />;
         return React.createElement('div', attributes, content);
     }
 
-    protected handleEnter(event: KeyboardEvent): void {
-        const node = this.model.selectedNodes[0] as TimelineNode;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const command: any = node.timelineItem.command;
+    protected override handleEnter(event: KeyboardEvent): void {
+        const node = this.model.getFocusedNode() as TimelineNode;
+        const command = node?.timelineItem?.command;
         if (command) {
-            this.commandRegistry.executeCommand(command.id, ...command.arguments ? command.arguments : []);
+            this.commandRegistry.executeCommand(command.id, ...(command.arguments ? command.arguments : []));
         }
     }
 
-    protected async handleLeft(event: KeyboardEvent): Promise<void> {
+    protected override async handleLeft(event: KeyboardEvent): Promise<void> {
         this.model.selectPrevNode();
     }
 }
@@ -81,12 +80,12 @@ export namespace TimelineItemNode {
 }
 
 export class TimelineItemNode extends React.Component<TimelineItemNode.Props> {
-    render(): JSX.Element | undefined {
+    override render(): JSX.Element | undefined {
         const { label, description, detail } = this.props.timelineItem;
         return <div className='timeline-item'
-                    title={detail}
-                    onContextMenu={this.renderContextMenu}
-                    onClick={this.open}>
+            title={detail}
+            onContextMenu={this.renderContextMenu}
+            onClick={this.open}>
             <div className={`noWrapInfo ${TREE_NODE_SEGMENT_GROW_CLASS}`} >
                 <span className='name'>{label}</span>
                 <span className='label'>{description}</span>

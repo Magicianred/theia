@@ -1,30 +1,28 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
-import { Position, Range, Location } from '@theia/core/shared/vscode-languageserver-types';
-import * as lsp from '@theia/core/shared/vscode-languageserver-types';
+import { Position, Range, Location } from '@theia/core/shared/vscode-languageserver-protocol';
+import * as lsp from '@theia/core/shared/vscode-languageserver-protocol';
 import URI from '@theia/core/lib/common/uri';
-import { Event, Disposable, TextDocumentContentChangeDelta } from '@theia/core/lib/common';
+import { Event, Disposable, TextDocumentContentChangeDelta, Reference, isObject } from '@theia/core/lib/common';
 import { Saveable, Navigatable, Widget } from '@theia/core/lib/browser';
-import { EditorDecoration } from './decorations';
-import { Reference } from '@theia/core/lib/common';
+import { EditorDecoration } from './decorations/editor-decoration';
+import { MarkdownString } from '@theia/core/lib/common/markdown-rendering';
 
-export {
-    Position, Range, Location
-};
+export { Position, Range, Location };
 
 export const TextEditorProvider = Symbol('TextEditorProvider');
 export type TextEditorProvider = (uri: URI) => Promise<TextEditor>;
@@ -36,6 +34,17 @@ export interface TextEditorDocument extends lsp.TextDocument, Saveable, Disposab
      * @since 1.8.0
      */
     findMatches?(options: FindMatchesOptions): FindMatch[];
+    /**
+     * Creates a valid position. If the position is outside of the backing document, this method will return a position that is ensured to be inside the document and valid.
+     * For example, when the `position` is `{ line: 1, character: 0 }` and the document is empty, this method will return with `{ line: 0, character: 0 }`.
+     */
+    toValidPosition(position: Position): Position;
+    /**
+     * Creates a valid range. If the `range` argument is outside of the document, this method will return with a new range that does not exceed the boundaries of the document.
+     * For example, if the argument is `{ start: { line: 1, character: 0 }, end: { line: 1, character: 0 } }` and the document is empty, the return value is
+     * `{ start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }`.
+     */
+    toValidRange(range: Range): Range;
 }
 
 // Refactoring
@@ -199,6 +208,8 @@ export interface TextEditor extends Disposable, TextEditorSelection, Navigatable
     readonly node: HTMLElement;
 
     readonly uri: URI;
+    readonly isReadonly: boolean | MarkdownString;
+    readonly onDidChangeReadOnly: Event<boolean | MarkdownString>;
     readonly document: TextEditorDocument;
     readonly onDocumentContentChanged: Event<TextDocumentChangeEvent>;
 
@@ -282,6 +293,8 @@ export interface TextEditor extends Disposable, TextEditorSelection, Navigatable
     setEncoding(encoding: string, mode: EncodingMode): void;
 
     readonly onEncodingChanged: Event<string>;
+
+    shouldDisplayDirtyDiff(): boolean;
 }
 
 export interface Dimension {
@@ -332,9 +345,8 @@ export interface ReplaceOperation {
 }
 
 export namespace TextEditorSelection {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    export function is(e: any): e is TextEditorSelection {
-        return e && e['uri'] instanceof URI;
+    export function is(arg: unknown): arg is TextEditorSelection {
+        return isObject<TextEditorSelection>(arg) && arg.uri instanceof URI;
     }
 }
 

@@ -1,25 +1,25 @@
-/********************************************************************************
- * Copyright (C) 2017 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
-import { ApplicationShell, FrontendApplication, WidgetManager, WidgetOpenMode } from '@theia/core/lib/browser';
+import { ApplicationShell, FrontendApplication, QuickPickValue, WidgetManager, WidgetOpenMode } from '@theia/core/lib/browser';
 import { open, OpenerService } from '@theia/core/lib/browser/opener-service';
 import { CommandService, ILogger } from '@theia/core/lib/common';
 import { MessageService } from '@theia/core/lib/common/message-service';
 import { Deferred } from '@theia/core/lib/common/promise-util';
-import { QuickPickItem, QuickPickService } from '@theia/core/lib/common/quick-pick-service';
+import { QuickPickItemOrSeparator, QuickPickService } from '@theia/core/lib/common/quick-pick-service';
 import { LabelProvider } from '@theia/core/lib/browser/label-provider';
 import URI from '@theia/core/lib/common/uri';
 import { EditorManager } from '@theia/editor/lib/browser';
@@ -30,7 +30,7 @@ import { TerminalWidgetFactoryOptions } from '@theia/terminal/lib/browser/termin
 import { VariableResolverService } from '@theia/variable-resolver/lib/browser';
 import { WorkspaceService } from '@theia/workspace/lib/browser/workspace-service';
 import { inject, injectable, named, postConstruct } from '@theia/core/shared/inversify';
-import { DiagnosticSeverity, Range } from '@theia/core/shared/vscode-languageserver-types';
+import { DiagnosticSeverity, Range } from '@theia/core/shared/vscode-languageserver-protocol';
 import {
     ApplyToKind,
     BackgroundTaskEndedEvent,
@@ -48,7 +48,8 @@ import {
     TaskInfo,
     TaskOutputPresentation,
     TaskOutputProcessedEvent,
-    TaskServer
+    TaskServer,
+    asVariableName
 } from '../common';
 import { TaskWatcher } from '../common/task-watcher';
 import { ProvidedTaskConfigurations } from './provided-task-configurations';
@@ -65,6 +66,7 @@ import { TaskNode } from './task-node';
 import { MonacoWorkspace } from '@theia/monaco/lib/browser/monaco-workspace';
 import { TaskTerminalWidgetManager } from './task-terminal-widget-manager';
 import { ShellTerminalServerProxy } from '@theia/terminal/lib/common/shell-terminal-protocol';
+import { Mutex } from 'async-mutex';
 
 export interface QuickPickProblemMatcherItem {
     problemMatchers: NamedProblemMatcher[] | undefined;
@@ -86,19 +88,26 @@ export interface TaskEndedInfo {
     value: number | boolean | undefined
 }
 
+export interface LastRunTaskInfo {
+    resolvedTask?: TaskConfiguration;
+    option?: RunTaskOption
+}
+
 @injectable()
 export class TaskService implements TaskConfigurationClient {
 
     /**
      * The last executed task.
      */
-    protected lastTask: { source: string, taskLabel: string, scope: TaskConfigurationScope } | undefined = undefined;
+    protected lastTask: LastRunTaskInfo = { resolvedTask: undefined, option: undefined };
     protected cachedRecentTasks: TaskConfiguration[] = [];
     protected runningTasks = new Map<number, {
         exitCode: Deferred<number | undefined>,
         terminateSignal: Deferred<string | undefined>,
         isBackgroundTaskEnded: Deferred<boolean | undefined>
     }>();
+
+    protected taskStartingLock: Mutex = new Mutex();
 
     @inject(FrontendApplication)
     protected readonly app: FrontendApplication;
@@ -152,7 +161,7 @@ export class TaskService implements TaskConfigurationClient {
     protected readonly problemMatcherRegistry: ProblemMatcherRegistry;
 
     @inject(QuickPickService)
-    protected readonly quickPick: QuickPickService;
+    protected readonly quickPickService: QuickPickService;
 
     @inject(OpenerService)
     protected readonly openerService: OpenerService;
@@ -241,7 +250,7 @@ export class TaskService implements TaskConfigurationClient {
                                 }
                             }
                         }
-                        const uri = new URI(problem.resource.path).withScheme(problem.resource.scheme);
+                        const uri = problem.resource.withScheme(problem.resource.scheme);
                         const document = this.monacoWorkspace.getTextDocument(uri.toString());
                         if (problem.description.applyTo === ApplyToKind.openDocuments && !!document ||
                             problem.description.applyTo === ApplyToKind.closedDocuments && !document ||
@@ -395,11 +404,14 @@ export class TaskService implements TaskConfigurationClient {
     }
 
     /**
-     * Returns an array of the task configurations which are provided by the extensions.
+     * Returns an array that contains the task configurations provided by the task providers for the specified task type.
      * @param token  The cache token for the user interaction in progress
+     * @param type The task type (filter) associated to the returning TaskConfigurations
+     *
+     * '*' indicates all tasks regardless of the type
      */
-    getProvidedTasks(token: number): Promise<TaskConfiguration[]> {
-        return this.providedTaskConfigurations.getTasks(token);
+    getProvidedTasks(token: number, type?: string): Promise<TaskConfiguration[]> {
+        return this.providedTaskConfigurations.getTasks(token, type);
     }
 
     addRecentTasks(tasks: TaskConfiguration | TaskConfiguration[]): void {
@@ -467,7 +479,7 @@ export class TaskService implements TaskConfigurationClient {
      *
      * @returns the last executed task or `undefined`.
      */
-    getLastTask(): { source: string, taskLabel: string, scope: TaskConfigurationScope } | undefined {
+    getLastTask(): LastRunTaskInfo {
         return this.lastTask;
     }
 
@@ -493,11 +505,14 @@ export class TaskService implements TaskConfigurationClient {
      * @param token  The cache token for the user interaction in progress
      */
     async runLastTask(token: number): Promise<TaskInfo | undefined> {
-        if (!this.lastTask) {
+        if (!this.lastTask?.resolvedTask) {
             return;
         }
-        const { source, taskLabel, scope } = this.lastTask;
-        return this.run(token, source, taskLabel, scope);
+        if (!this.lastTask.resolvedTask.runOptions?.reevaluateOnRerun) {
+            return this.runResolvedTask(this.lastTask.resolvedTask, this.lastTask.option);
+        }
+        const { _source, label, _scope } = this.lastTask.resolvedTask;
+        return this.run(token, _source, label, _scope);
     }
 
     /**
@@ -526,22 +541,22 @@ export class TaskService implements TaskConfigurationClient {
         if (!customizationObject.problemMatcher) {
             // ask the user what s/he wants to use to parse the task output
             const items = this.getCustomizeProblemMatcherItems();
-            const selected = await this.quickPick.show(items, {
+            const selected = await this.quickPickService.show(items, {
                 placeholder: 'Select for which kind of errors and warnings to scan the task output'
             });
-            if (selected) {
-                if (selected.problemMatchers) {
+            if (selected && ('value' in selected)) {
+                if (selected.value?.problemMatchers) {
                     let matcherNames: string[] = [];
-                    if (selected.problemMatchers && selected.problemMatchers.length === 0) { // never parse output for this task
+                    if (selected.value.problemMatchers && selected.value.problemMatchers.length === 0) { // never parse output for this task
                         matcherNames = [];
-                    } else if (selected.problemMatchers && selected.problemMatchers.length > 0) { // continue with user-selected parser
-                        matcherNames = selected.problemMatchers.map(matcher => matcher.name);
+                    } else if (selected.value.problemMatchers && selected.value.problemMatchers.length > 0) { // continue with user-selected parser
+                        matcherNames = selected.value.problemMatchers.map(matcher => matcher.name);
                     }
                     customizationObject.problemMatcher = matcherNames;
 
                     // write the selected matcher (or the decision of "never parse") into the `tasks.json`
                     this.updateTaskConfiguration(token, task, { problemMatcher: matcherNames });
-                } else if (selected.learnMore) { // user wants to learn more about parsing task output
+                } else if (selected.value?.learnMore) { // user wants to learn more about parsing task output
                     open(this.openerService, new URI('https://code.visualstudio.com/docs/editor/tasks#_processing-task-output-with-problem-matchers'));
                 }
                 // else, continue the task with no parser
@@ -727,34 +742,59 @@ export class TaskService implements TaskConfigurationClient {
     }
 
     async runTask(task: TaskConfiguration, option?: RunTaskOption): Promise<TaskInfo | undefined> {
-        const runningTasksInfo: TaskInfo[] = await this.getRunningTasks();
+        console.debug('entering runTask');
+        const releaseLock = await this.taskStartingLock.acquire();
+        console.debug('got lock');
 
-        // check if the task is active
-        const matchedRunningTaskInfo = runningTasksInfo.find(taskInfo => {
-            const taskConfig = taskInfo.config;
-            return this.taskDefinitionRegistry.compareTasks(taskConfig, task);
-        });
-        if (matchedRunningTaskInfo) { // the task is active
-            const taskName = this.taskNameResolver.resolve(task);
-            const terminalId = matchedRunningTaskInfo.terminalId;
-            if (terminalId) {
-                const terminal = this.terminalService.getByTerminalId(terminalId);
-                if (terminal) {
-                    if (TaskOutputPresentation.shouldSetFocusToTerminal(task)) { // assign focus to the terminal if presentation.focus is true
-                        this.terminalService.open(terminal, { mode: 'activate' });
-                    } else if (TaskOutputPresentation.shouldAlwaysRevealTerminal(task)) { // show the terminal but not assign focus
-                        this.terminalService.open(terminal, { mode: 'reveal' });
+        try {
+            // resolve problemMatchers
+            if (!option && task.problemMatcher) {
+                const customizationObject: TaskCustomization = { type: task.taskType, problemMatcher: task.problemMatcher, runOptions: task.runOptions };
+                const resolvedMatchers = await this.resolveProblemMatchers(task, customizationObject);
+                option = {
+                    customization: { ...customizationObject, ...{ problemMatcher: resolvedMatchers } }
+                };
+            }
+
+            const runningTasksInfo: TaskInfo[] = await this.getRunningTasks();
+            // check if the task is active
+            const matchedRunningTaskInfo = runningTasksInfo.find(taskInfo => {
+                const taskConfig = taskInfo.config;
+                return this.taskDefinitionRegistry.compareTasks(taskConfig, task);
+            });
+            console.debug(`running task ${JSON.stringify(task)}, already running = ${!!matchedRunningTaskInfo}`);
+
+            if (matchedRunningTaskInfo) { // the task is active
+                releaseLock();
+                console.debug('released lock');
+                const taskName = this.taskNameResolver.resolve(task);
+                const terminalId = matchedRunningTaskInfo.terminalId;
+                if (terminalId) {
+                    const terminal = this.terminalService.getByTerminalId(terminalId);
+                    if (terminal) {
+                        if (TaskOutputPresentation.shouldSetFocusToTerminal(task)) { // assign focus to the terminal if presentation.focus is true
+                            this.terminalService.open(terminal, { mode: 'activate' });
+                        } else if (TaskOutputPresentation.shouldAlwaysRevealTerminal(task)) { // show the terminal but not assign focus
+                            this.terminalService.open(terminal, { mode: 'reveal' });
+                        }
                     }
                 }
+                const selectedAction = await this.messageService.info(`The task '${taskName}' is already active`, 'Terminate Task', 'Restart Task');
+                if (selectedAction === 'Terminate Task') {
+                    await this.terminateTask(matchedRunningTaskInfo);
+                } else if (selectedAction === 'Restart Task') {
+                    return this.restartTask(matchedRunningTaskInfo, option);
+                }
+            } else { // run task as the task is not active
+                console.debug('task about to start');
+                const taskInfo = await this.doRunTask(task, option);
+                releaseLock();
+                console.debug('release lock 2');
+                return taskInfo;
             }
-            const selectedAction = await this.messageService.info(`The task '${taskName}' is already active`, 'Terminate Task', 'Restart Task');
-            if (selectedAction === 'Terminate Task') {
-                await this.terminateTask(matchedRunningTaskInfo);
-            } else if (selectedAction === 'Restart Task') {
-                return this.restartTask(matchedRunningTaskInfo, option);
-            }
-        } else { // run task as the task is not active
-            return this.doRunTask(task, option);
+        } catch (e) {
+            releaseLock();
+            throw e;
         }
     }
 
@@ -869,13 +909,9 @@ export class TaskService implements TaskConfigurationClient {
     async updateTaskConfiguration(token: number, task: TaskConfiguration, update: { [name: string]: any }): Promise<void> {
         if (update.problemMatcher) {
             if (Array.isArray(update.problemMatcher)) {
-                update.problemMatcher.forEach((name, index) => {
-                    if (!name.startsWith('$')) {
-                        update.problemMatcher[index] = `$${update.problemMatcher[index]}`;
-                    }
-                });
-            } else if (!update.problemMatcher.startsWith('$')) {
-                update.problemMatcher = `$${update.problemMatcher}`;
+                update.problemMatcher.forEach((_name, index) => update.problemMatcher[index] = asVariableName(update.problemMatcher[index]));
+            } else {
+                update.problemMatcher = asVariableName(update.problemMatcher);
             }
         }
         this.taskConfigurations.updateTaskConfig(token, task, update);
@@ -921,7 +957,7 @@ export class TaskService implements TaskConfigurationClient {
     }
 
     protected async getTaskCustomization(task: TaskConfiguration): Promise<TaskCustomization> {
-        const customizationObject: TaskCustomization = { type: '', _scope: task._scope };
+        const customizationObject: TaskCustomization = { type: '', _scope: task._scope, runOptions: task.runOptions };
         const customizationFound = this.taskConfigurations.getCustomizationForTask(task);
         if (customizationFound) {
             Object.assign(customizationObject, customizationFound);
@@ -954,12 +990,11 @@ export class TaskService implements TaskConfigurationClient {
      * @param option options to run the resolved task
      */
     protected async runResolvedTask(resolvedTask: TaskConfiguration, option?: RunTaskOption): Promise<TaskInfo | undefined> {
-        const source = resolvedTask._source;
         const taskLabel = resolvedTask.label;
         let taskInfo: TaskInfo | undefined;
         try {
             taskInfo = await this.taskServer.run(resolvedTask, this.getContext(), option);
-            this.lastTask = { source, taskLabel, scope: resolvedTask._scope };
+            this.lastTask = { resolvedTask, option };
             this.logger.debug(`Task created. Task id: ${taskInfo.taskId}`);
 
             /**
@@ -982,8 +1017,8 @@ export class TaskService implements TaskConfigurationClient {
         }
     }
 
-    protected getCustomizeProblemMatcherItems(): QuickPickItem<QuickPickProblemMatcherItem>[] {
-        const items: QuickPickItem<QuickPickProblemMatcherItem>[] = [];
+    protected getCustomizeProblemMatcherItems(): Array<QuickPickValue<QuickPickProblemMatcherItem> | QuickPickItemOrSeparator> {
+        const items: Array<QuickPickValue<QuickPickProblemMatcherItem> | QuickPickItemOrSeparator> = [];
         items.push({
             label: 'Continue without scanning the task output',
             value: { problemMatchers: undefined }
@@ -1003,7 +1038,7 @@ export class TaskService implements TaskConfigurationClient {
         ({
             label: matcher.label,
             value: { problemMatchers: [matcher] },
-            description: matcher.name.startsWith('$') ? matcher.name : `$${matcher.name}`
+            description: asVariableName(matcher.name)
         })
         ));
         return items;
@@ -1028,7 +1063,7 @@ export class TaskService implements TaskConfigurationClient {
         if (!terminal || terminal.kind !== 'user' || (await terminal.hasChildProcesses())) {
             terminal = <TerminalWidget>await this.terminalService.newTerminal(<TerminalWidgetFactoryOptions>{ created: new Date().toString() });
             await terminal.start();
-            this.terminalService.activateTerminal(terminal);
+            this.terminalService.open(terminal);
         }
         terminal.sendText(selectedText);
     }
@@ -1057,7 +1092,8 @@ export class TaskService implements TaskConfigurationClient {
             title: taskInfo
                 ? `Task: ${taskInfo.config.label}`
                 : `Task: #${taskId}`,
-            destroyTermOnClose: true
+            destroyTermOnClose: true,
+            useServerTitle: false
         }, {
             widgetOptions: { area: 'bottom' },
             mode: widgetOpenMode,

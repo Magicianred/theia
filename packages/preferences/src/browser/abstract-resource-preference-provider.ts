@@ -1,94 +1,91 @@
-/********************************************************************************
- * Copyright (C) 2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable no-null/no-null */
 
 import * as jsoncparser from 'jsonc-parser';
-import { JSONExt } from '@theia/core/shared/@phosphor/coreutils';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
-import { MessageService } from '@theia/core/lib/common/message-service';
 import { Disposable } from '@theia/core/lib/common/disposable';
 import { PreferenceProvider, PreferenceSchemaProvider, PreferenceScope, PreferenceProviderDataChange } from '@theia/core/lib/browser';
 import URI from '@theia/core/lib/common/uri';
 import { PreferenceConfigurations } from '@theia/core/lib/browser/preferences/preference-configurations';
-import { MonacoTextModelService } from '@theia/monaco/lib/browser/monaco-text-model-service';
-import { MonacoEditorModel } from '@theia/monaco/lib/browser/monaco-editor-model';
-import { MonacoWorkspace } from '@theia/monaco/lib/browser/monaco-workspace';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
+import { PreferenceContext, PreferenceTransaction, PreferenceTransactionFactory } from './preference-transaction-manager';
+import { Emitter, Event } from '@theia/core';
 
 @injectable()
 export abstract class AbstractResourcePreferenceProvider extends PreferenceProvider {
 
-    protected preferences: { [key: string]: any } = {};
-    protected model: MonacoEditorModel | undefined;
+    protected preferences: Record<string, any> = {};
+    protected _fileExists = false;
     protected readonly loading = new Deferred();
-    protected modelInitialized = false;
+    protected transaction: PreferenceTransaction | undefined;
+    protected readonly onDidChangeValidityEmitter = new Emitter<boolean>();
 
-    @inject(MessageService) protected readonly messageService: MessageService;
+    set fileExists(exists: boolean) {
+        if (exists !== this._fileExists) {
+            this._fileExists = exists;
+            this.onDidChangeValidityEmitter.fire(exists);
+        }
+    }
+
+    get onDidChangeValidity(): Event<boolean> {
+        return this.onDidChangeValidityEmitter.event;
+    }
+
+    @inject(PreferenceTransactionFactory) protected readonly transactionFactory: PreferenceTransactionFactory;
     @inject(PreferenceSchemaProvider) protected readonly schemaProvider: PreferenceSchemaProvider;
     @inject(FileService) protected readonly fileService: FileService;
-
-    @inject(PreferenceConfigurations)
-    protected readonly configurations: PreferenceConfigurations;
-
-    @inject(MonacoTextModelService)
-    protected readonly textModelService: MonacoTextModelService;
-
-    @inject(MonacoWorkspace)
-    protected readonly workspace: MonacoWorkspace;
+    @inject(PreferenceConfigurations) protected readonly configurations: PreferenceConfigurations;
 
     @postConstruct()
-    protected async init(): Promise<void> {
+    protected init(): void {
+        this.doInit();
+    }
+
+    protected async doInit(): Promise<void> {
         const uri = this.getUri();
-        this.toDispose.push(Disposable.create(() => this.loading.reject(new Error(`preference provider for '${uri}' was disposed`))));
+        this.toDispose.push(Disposable.create(() => this.loading.reject(new Error(`Preference provider for '${uri}' was disposed.`))));
         await this.readPreferencesFromFile();
         this._ready.resolve();
-
-        const reference = await this.textModelService.createModelReference(uri);
-        if (this.toDispose.disposed) {
-            reference.dispose();
-            return;
-        }
-
-        this.model = reference.object;
         this.loading.resolve();
-        this.modelInitialized = true;
-
-        this.toDispose.push(reference);
-        this.toDispose.push(Disposable.create(() => this.model = undefined));
-
-        this.toDispose.push(this.model.onDidChangeContent(() => this.readPreferences()));
-        this.toDispose.push(this.model.onDirtyChanged(() => this.readPreferences()));
-        this.toDispose.push(this.model.onDidChangeValid(() => this.readPreferences()));
-
-        this.toDispose.push(Disposable.create(() => this.reset()));
+        const storageUri = this.toFileManager().getConfigUri();
+        this.toDispose.pushAll([
+            this.fileService.watch(storageUri),
+            this.fileService.onDidFilesChange(e => {
+                if (e.contains(storageUri)) {
+                    this.readPreferencesFromFile();
+                }
+            }),
+            Disposable.create(() => this.reset()),
+        ]);
     }
 
     protected abstract getUri(): URI;
-    protected abstract getScope(): PreferenceScope;
+    abstract getScope(): PreferenceScope;
 
-    protected get valid(): boolean {
-        return this.modelInitialized ? !!this.model?.valid : Object.keys(this.preferences).length > 0;
+    get valid(): boolean {
+        return this._fileExists;
     }
 
-    getConfigUri(): URI;
-    getConfigUri(resourceUri: string | undefined): URI | undefined;
-    getConfigUri(resourceUri?: string): URI | undefined {
+    override getConfigUri(): URI;
+    override getConfigUri(resourceUri: string | undefined): URI | undefined;
+    override getConfigUri(resourceUri?: string): URI | undefined {
         if (!resourceUri) {
             return this.getUri();
         }
@@ -112,82 +109,58 @@ export abstract class AbstractResourcePreferenceProvider extends PreferenceProvi
     }
 
     async setPreference(key: string, value: any, resourceUri?: string): Promise<boolean> {
-        await this.loading.promise;
-        if (!this.model) {
+        let path: string[] | undefined;
+        if (this.toDispose.disposed || !(path = this.getPath(key)) || !this.contains(resourceUri)) {
             return false;
         }
-        if (!this.contains(resourceUri)) {
-            return false;
-        }
-        const path = this.getPath(key);
-        if (!path) {
-            return false;
-        }
-        try {
-            const content = this.model.getText().trim();
-            if (!content && value === undefined) {
-                return true;
-            }
-            const textModel = this.model.textEditorModel;
-            const editOperations: monaco.editor.IIdentifiedSingleEditOperation[] = [];
-            if (path.length || value !== undefined) {
-                const { insertSpaces, tabSize, defaultEOL } = textModel.getOptions();
-                for (const edit of jsoncparser.modify(content, path, value, {
-                    formattingOptions: {
-                        insertSpaces,
-                        tabSize,
-                        eol: defaultEOL === monaco.editor.DefaultEndOfLine.LF ? '\n' : '\r\n'
-                    }
-                })) {
-                    const start = textModel.getPositionAt(edit.offset);
-                    const end = textModel.getPositionAt(edit.offset + edit.length);
-                    editOperations.push({
-                        range: monaco.Range.fromPositions(start, end),
-                        text: edit.content || null,
-                        forceMoveMarkers: false
-                    });
+        return this.doSetPreference(key, path, value);
+    }
+
+    protected async doSetPreference(key: string, path: string[], value: unknown): Promise<boolean> {
+        if (!this.transaction?.open) {
+            const current = this.transaction;
+            this.transaction = this.transactionFactory(this.toFileManager(), current?.result);
+            this.transaction.onWillConclude(({ status, waitUntil }) => {
+                if (status) {
+                    waitUntil((async () => {
+                        await this.readPreferencesFromFile();
+                        await this.fireDidPreferencesChanged(); // Ensure all consumers of the event have received it.
+                    })());
                 }
-            } else {
-                editOperations.push({
-                    range: textModel.getFullModelRange(),
-                    text: null,
-                    forceMoveMarkers: false
-                });
-            }
-            await this.workspace.applyBackgroundEdit(this.model, editOperations);
-            return await this.pendingChanges;
-        } catch (e) {
-            const message = `Failed to update the value of '${key}' in '${this.getUri()}'.`;
-            this.messageService.error(`${message} Please check if it is corrupted.`);
-            console.error(`${message}`, e);
-            return false;
+            });
+            this.toDispose.push(this.transaction);
         }
+        return this.transaction.enqueueAction(key, path, value);
+    }
+
+    /**
+     * Use this method as intermediary for interactions with actual files.
+     * Allows individual providers to modify where they store their files without disrupting the preference system's
+     * conventions about scope and file location.
+     */
+    protected toFileManager(): PreferenceContext {
+        return this;
     }
 
     protected getPath(preferenceName: string): string[] | undefined {
+        const asOverride = this.preferenceOverrideService.overriddenPreferenceName(preferenceName);
+        if (asOverride?.overrideIdentifier) {
+            return [this.preferenceOverrideService.markLanguageOverride(asOverride.overrideIdentifier), asOverride.preferenceName];
+        }
         return [preferenceName];
     }
 
     protected async readPreferencesFromFile(): Promise<void> {
-        const content = await this.fileService.read(this.getUri()).catch(() => ({ value: '' }));
+        const content = await this.fileService.read(this.toFileManager().getConfigUri())
+            .then(value => {
+                this.fileExists = true;
+                return value;
+            })
+            .catch(() => {
+                this.fileExists = false;
+                return { value: '' };
+            });
         this.readPreferencesFromContent(content.value);
-    }
-
-    /**
-     * It HAS to be sync to ensure that `setPreference` returns only when values are updated
-     * or any other operation modifying the monaco model content.
-     */
-    protected readPreferences(): void {
-        const model = this.model;
-        if (!model || model.dirty) {
-            return;
-        }
-        try {
-            const content = model.valid ? model.getText() : '';
-            this.readPreferencesFromContent(content);
-        } catch (e) {
-            console.error(`Failed to load preferences from '${this.getUri()}'.`, e);
-        }
     }
 
     protected readPreferencesFromContent(content: string): void {
@@ -228,16 +201,14 @@ export abstract class AbstractResourcePreferenceProvider extends PreferenceProvi
                     continue;
                 }
             }
-            if (newValue === undefined && oldValue !== newValue
-                || oldValue === undefined && newValue !== oldValue // JSONExt.deepEqual() does not support handling `undefined`
-                || !JSONExt.deepEqual(oldValue, newValue)) {
+            if (!PreferenceProvider.deepEqual(newValue, oldValue)) {
                 prefChanges.push({
                     preferenceName: prefName, newValue, oldValue, scope: this.getScope(), domain: this.getDomain()
                 });
             }
         }
 
-        if (prefChanges.length > 0) { // do not emit the change event if the pref value is not changed
+        if (prefChanges.length > 0) {
             this.emitPreferencesChangedEvent(prefChanges);
         }
     }
@@ -258,5 +229,4 @@ export abstract class AbstractResourcePreferenceProvider extends PreferenceProvi
             this.emitPreferencesChangedEvent(changes);
         }
     }
-
 }

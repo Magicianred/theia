@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2017-2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017-2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import {
@@ -21,7 +21,8 @@ import {
     TaskDefinition,
     TaskOutputPresentation,
     TaskConfigurationScope,
-    TaskScope
+    TaskScope,
+    asVariableName
 } from '../common';
 import { TaskDefinitionRegistry } from './task-definition-registry';
 import { ProvidedTaskConfigurations } from './provided-task-configurations';
@@ -133,12 +134,12 @@ export class TaskConfigurations implements Disposable {
         const configuredTasks = Array.from(this.tasksMap.values()).reduce((acc, labelConfigMap) => acc.concat(Array.from(labelConfigMap.values())), [] as TaskConfiguration[]);
         const detectedTasksAsConfigured: TaskConfiguration[] = [];
         for (const [rootFolder, customizations] of Array.from(this.taskCustomizationMap.entries())) {
-            for (const cus of customizations) {
+            for (const customization of customizations) {
                 // TODO: getTasksToCustomize() will ask all task providers to contribute tasks. Doing this in a loop is bad.
-                const detected = await this.providedTaskConfigurations.getTaskToCustomize(token, cus, rootFolder);
+                const detected = await this.providedTaskConfigurations.getTaskToCustomize(token, customization, rootFolder);
                 if (detected) {
                     // there might be a provided task that has a different scope from the task we're inspecting
-                    detectedTasksAsConfigured.push({ ...detected, ...cus });
+                    detectedTasksAsConfigured.push({ ...detected, ...customization });
                 }
             }
         }
@@ -249,10 +250,9 @@ export class TaskConfigurations implements Disposable {
         if (hasCustomization) {
             const taskDefinition = this.taskDefinitionRegistry.getDefinition(taskConfig);
             if (taskDefinition) {
-                const cus = customizationByType.filter(customization =>
-                    taskDefinition.properties.required.every(rp => customization[rp] === taskConfig[rp])
-                )[0]; // Only support having one customization per task
-                return cus;
+                const required = taskDefinition.properties.required || [];
+                // Only support having one customization per task.
+                return customizationByType.find(customization => required.every(property => customization[property] === taskConfig[property]));
             }
         }
         return undefined;
@@ -329,7 +329,7 @@ export class TaskConfigurations implements Disposable {
             console.error('Detected / Contributed tasks should have a task definition.');
             return;
         }
-        const customization: TaskCustomization = { type: task.type };
+        const customization: TaskCustomization = { type: task.type, runOptions: task.runOptions };
         definition.properties.all.forEach(p => {
             if (task[p] !== undefined) {
                 customization[p] = task[p];
@@ -350,7 +350,7 @@ export class TaskConfigurations implements Disposable {
             } else if (task.problemMatcher) {
                 problemMatcher.push(task.problemMatcher.name!);
             }
-            customization.problemMatcher = problemMatcher.map(name => name.startsWith('$') ? name : `$${name}`);
+            customization.problemMatcher = problemMatcher.map(asVariableName);
         }
         if (task.group) {
             customization.group = task.group;

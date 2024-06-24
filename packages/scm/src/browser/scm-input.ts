@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2019 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -36,13 +36,15 @@ export interface ScmInputValidator {
 }
 
 export interface ScmInputOptions {
-    placeholder?: string
-    validator?: ScmInputValidator
+    placeholder?: string;
+    validator?: ScmInputValidator;
+    visible?: boolean;
+    enabled?: boolean;
 }
 
 export interface ScmInputData {
-    value?: string
-    issue?: ScmInputIssue
+    value?: string;
+    issue?: ScmInputIssue;
 }
 
 export class ScmInput implements Disposable {
@@ -90,6 +92,32 @@ export class ScmInput implements Disposable {
             return;
         }
         this._value = value;
+        this.fireDidChange();
+        this.validate();
+    }
+
+    protected _visible = this.options.visible;
+    get visible(): boolean {
+        return this._visible ?? true;
+    }
+    set visible(visible: boolean) {
+        if (this.visible === visible) {
+            return;
+        }
+        this._visible = visible;
+        this.fireDidChange();
+        this.validate();
+    }
+
+    protected _enabled = this.options.enabled ?? true;
+    get enabled(): boolean {
+        return this._enabled;
+    }
+    set enabled(enabled: boolean) {
+        if (this._enabled === enabled) {
+            return;
+        }
+        this._enabled = enabled;
         this.fireDidChange();
         this.validate();
     }

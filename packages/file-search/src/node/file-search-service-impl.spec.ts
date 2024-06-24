@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { expect } from 'chai';
 import * as assert from 'assert';
@@ -25,8 +25,6 @@ import { bindLogger } from '@theia/core/lib/node/logger-backend-module';
 import URI from '@theia/core/lib/common/uri';
 import { FileSearchService } from '../common/file-search-service';
 import { RawProcessFactory } from '@theia/process/lib/node';
-
-/* eslint-disable no-unused-expressions */
 
 const testContainer = new Container();
 
@@ -51,8 +49,7 @@ describe('search-service', function (): void {
     it('should fuzzy search this spec file', async () => {
         const rootUri = FileUri.create(path.resolve(__dirname, '..')).toString();
         const matches = await service.find('spc', { rootUris: [rootUri] });
-        // eslint-disable-next-line deprecation/deprecation
-        const expectedFile = FileUri.create(__filename).displayName;
+        const expectedFile = FileUri.create(__filename).path.base;
         const testFile = matches.find(e => e.endsWith(expectedFile));
         expect(testFile).to.not.be.undefined;
     });
@@ -164,8 +161,9 @@ describe('search-service', function (): void {
         const rootUri = FileUri.create(path.resolve(__dirname, '../../../..'));
 
         it('not fuzzy', async () => {
-            const searchPattern = rootUri.path.dir.base;
+            const searchPattern = 'package'; // package.json should produce a result.
             const matches = await service.find(searchPattern, { rootUris: [rootUri.toString()], fuzzyMatch: false, useGitIgnore: true, limit: 200 });
+            expect(matches).not.empty;
             for (const match of matches) {
                 const relativeUri = rootUri.relative(new URI(match));
                 assert.notStrictEqual(relativeUri, undefined);
@@ -176,6 +174,7 @@ describe('search-service', function (): void {
 
         it('fuzzy', async () => {
             const matches = await service.find('shell', { rootUris: [rootUri.toString()], fuzzyMatch: true, useGitIgnore: true, limit: 200 });
+            expect(matches).not.empty;
             for (const match of matches) {
                 const relativeUri = rootUri.relative(new URI(match));
                 assert.notStrictEqual(relativeUri, undefined);

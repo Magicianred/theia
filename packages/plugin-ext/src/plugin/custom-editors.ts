@@ -1,37 +1,35 @@
-/********************************************************************************
- * Copyright (c) 2021 SAP SE or an SAP affiliate company and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2021 SAP SE or an SAP affiliate company and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 // copied and modified from https://github.com/microsoft/vscode/blob/53eac52308c4611000a171cc7bf1214293473c78/src/vs/workbench/api/common/extHostCustomEditors.ts
 
-import { CustomEditorsExt, CustomEditorsMain, PLUGIN_RPC_CONTEXT } from '../common/plugin-api-rpc';
+import { CustomEditorsExt, CustomEditorsMain, Plugin, PLUGIN_RPC_CONTEXT } from '../common/plugin-api-rpc';
 import * as theia from '@theia/plugin';
 import { RPCProtocol } from '../common/rpc-protocol';
-import { Plugin } from '../common/plugin-api-rpc';
-import { URI } from './types-impl';
+import { Disposable, URI } from './types-impl';
 import { UriComponents } from '../common/uri-components';
 import { DocumentsExtImpl } from './documents';
 import { WebviewImpl, WebviewsExtImpl } from './webviews';
 import { CancellationToken, CancellationTokenSource } from '@theia/core/lib/common/cancellation';
 import { DisposableCollection } from '@theia/core/lib/common/disposable';
-import { Disposable } from './types-impl';
 import { WorkspaceExtImpl } from './workspace';
-import * as Converters from './type-converters';
+import { Cache } from '../common/cache';
 
 export class CustomEditorsExtImpl implements CustomEditorsExt {
     private readonly proxy: CustomEditorsMain;
@@ -61,7 +59,7 @@ export class CustomEditorsExtImpl implements CustomEditorsExt {
             disposables.push(this.editorProviders.addCustomProvider(viewType, plugin, provider));
 
             if (this.supportEditing(provider)) {
-                disposables.push(provider.onDidChangeCustomDocument(e => {
+                disposables.push(provider.onDidChangeCustomDocument((e: theia.CustomDocumentEditEvent | theia.CustomDocumentContentChangeEvent) => {
                     const entry = this.getCustomDocumentEntry(viewType, e.document.uri);
                     if (isEditEvent(e)) {
                         const editId = entry.addEdit(e);
@@ -83,7 +81,7 @@ export class CustomEditorsExtImpl implements CustomEditorsExt {
         );
     }
 
-    async $createCustomDocument(resource: UriComponents, viewType: string, backupId: string | undefined, cancellation: CancellationToken): Promise<{
+    async $createCustomDocument(resource: UriComponents, viewType: string, openContext: theia.CustomDocumentOpenContext, cancellation: CancellationToken): Promise<{
         editable: boolean;
     }> {
         const entry = this.editorProviders.get(viewType);
@@ -96,7 +94,7 @@ export class CustomEditorsExtImpl implements CustomEditorsExt {
         }
 
         const revivedResource = URI.revive(resource);
-        const document = await entry.provider.openCustomDocument(revivedResource, { backupId }, cancellation);
+        const document = await entry.provider.openCustomDocument(revivedResource, openContext, cancellation);
         this.documents.add(viewType, document);
 
         return { editable: this.supportEditing(entry.provider) };
@@ -118,12 +116,12 @@ export class CustomEditorsExtImpl implements CustomEditorsExt {
         document.dispose();
     }
 
-    async $resolveWebviewEditor(
+    async $resolveWebviewEditor<T>(
         resource: UriComponents,
         handler: string,
         viewType: string,
         title: string,
-        position: number,
+        widgetOpenerOptions: object | undefined,
         options: theia.WebviewPanelOptions & theia.WebviewOptions,
         cancellation: CancellationToken
     ): Promise<void> {
@@ -131,10 +129,9 @@ export class CustomEditorsExtImpl implements CustomEditorsExt {
         if (!entry) {
             throw new Error(`No provider found for '${viewType}'`);
         }
-        const viewColumn = Converters.toViewColumn(position);
-        const panel = this.webviewExt.createWebviewPanel(viewType, title, {}, options, entry.plugin, handler);
+        const panel = this.webviewExt.createWebviewPanel(viewType, title, {}, options, entry.plugin, handler, false);
         const webviewOptions = WebviewImpl.toWebviewOptions(options, this.workspace, entry.plugin);
-        await this.proxy.$createCustomEditorPanel(handler, title, viewColumn, webviewOptions);
+        await this.proxy.$createCustomEditorPanel(handler, title, widgetOpenerOptions, webviewOptions);
 
         const revivedResource = URI.revive(resource);
 
@@ -337,36 +334,3 @@ class CustomDocumentStore {
     }
 }
 
-// copied from https://github.com/microsoft/vscode/blob/53eac52308c4611000a171cc7bf1214293473c78/src/vs/workbench/api/common/cache.ts
-class Cache<T> {
-    private static readonly enableDebugLogging = false;
-    private readonly _data = new Map<number, readonly T[]>();
-    private _idPool = 1;
-
-    constructor(
-        private readonly id: string
-    ) { }
-
-    add(item: readonly T[]): number {
-        const id = this._idPool++;
-        this._data.set(id, item);
-        this.logDebugInfo();
-        return id;
-    }
-
-    get(pid: number, id: number): T | undefined {
-        return this._data.has(pid) ? this._data.get(pid)![id] : undefined;
-    }
-
-    delete(id: number): void {
-        this._data.delete(id);
-        this.logDebugInfo();
-    }
-
-    private logDebugInfo(): void {
-        if (!Cache.enableDebugLogging) {
-            return;
-        }
-        console.log(`${this.id} cache size — ${this._data.size}`);
-    }
-}

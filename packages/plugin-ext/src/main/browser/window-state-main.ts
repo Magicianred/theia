@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { URI } from '@theia/core/shared/vscode-uri';
 import CoreURI from '@theia/core/lib/common/uri';
@@ -23,6 +23,7 @@ import { UriComponents } from '../../common/uri-components';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { open, OpenerService } from '@theia/core/lib/browser/opener-service';
 import { ExternalUriService } from '@theia/core/lib/browser/external-uri-service';
+import { WindowActivityTracker } from './window-activity-tracker';
 
 export class WindowStateMain implements WindowMain, Disposable {
 
@@ -46,6 +47,10 @@ export class WindowStateMain implements WindowMain, Disposable {
         const fireDidBlur = () => this.onFocusChanged(false);
         window.addEventListener('blur', fireDidBlur);
         this.toDispose.push(Disposable.create(() => window.removeEventListener('blur', fireDidBlur)));
+
+       const tracker = new WindowActivityTracker(window);
+       this.toDispose.push(tracker.onDidChangeActiveState(isActive => this.onActiveStateChanged(isActive)));
+       this.toDispose.push(tracker);
     }
 
     dispose(): void {
@@ -53,7 +58,11 @@ export class WindowStateMain implements WindowMain, Disposable {
     }
 
     private onFocusChanged(focused: boolean): void {
-        this.proxy.$onWindowStateChanged(focused);
+        this.proxy.$onDidChangeWindowFocus(focused);
+    }
+
+    private onActiveStateChanged(isActive: boolean): void {
+        this.proxy.$onDidChangeWindowActive(isActive);
     }
 
     async $openUri(uriComponent: UriComponents): Promise<boolean> {

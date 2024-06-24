@@ -1,23 +1,25 @@
-/********************************************************************************
- * Copyright (C) 2019 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, injectable } from '@theia/core/shared/inversify';
-import { TaskProviderRegistry } from './task-contribution';
+import { TaskProviderRegistry, TaskProvider } from './task-contribution';
 import { TaskDefinitionRegistry } from './task-definition-registry';
 import { TaskConfiguration, TaskCustomization, TaskOutputPresentation, TaskConfigurationScope, TaskScope } from '../common';
+
+export const ALL_TASK_TYPES: string = '*';
 
 @injectable()
 export class ProvidedTaskConfigurations {
@@ -35,46 +37,87 @@ export class ProvidedTaskConfigurations {
     protected readonly taskDefinitionRegistry: TaskDefinitionRegistry;
 
     private currentToken: number = 0;
+    private activatedProvidersTypes: string[] = [];
     private nextToken = 1;
 
     startUserAction(): number {
         return this.nextToken++;
     }
 
-    /** returns a list of provided tasks */
-    async getTasks(token: number): Promise<TaskConfiguration[]> {
-        await this.refreshTasks(token);
+    protected updateUserAction(token: number): void {
+        if (this.currentToken !== token) {
+            this.currentToken = token;
+            this.activatedProvidersTypes.length = 0;
+        }
+    }
+
+    protected pushActivatedProvidersType(taskType: string): void {
+        if (!this.activatedProvidersTypes.includes(taskType)) {
+            this.activatedProvidersTypes.push(taskType);
+        }
+    }
+
+    protected isTaskProviderActivationNeeded(taskType?: string): boolean {
+        if (!taskType || this.activatedProvidersTypes.includes(taskType!) || this.activatedProvidersTypes.includes(ALL_TASK_TYPES)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Activate providers for the given taskType
+     * @param taskType A specific task type or '*' to indicate all task providers
+     */
+    protected async activateProviders(taskType?: string): Promise<void> {
+        if (!!taskType) {
+            await this.taskProviderRegistry.activateProvider(taskType);
+            this.pushActivatedProvidersType(taskType);
+        }
+    }
+
+    /** returns a list of provided tasks matching an optional given type, or all if '*' is used */
+    async getTasks(token: number, type?: string): Promise<TaskConfiguration[]> {
+        await this.refreshTasks(token, type);
         const tasks: TaskConfiguration[] = [];
         for (const taskLabelMap of this.tasksMap!.values()) {
             for (const taskScopeMap of taskLabelMap.values()) {
                 for (const task of taskScopeMap.values()) {
-                    tasks.push(task);
+                    if (!type || task.type === type || type === ALL_TASK_TYPES) {
+                        tasks.push(task);
+                    }
                 }
             }
         }
         return tasks;
     }
 
-    protected async refreshTasks(token: number): Promise<void> {
-        if (token !== this.currentToken) {
-            this.currentToken = token;
+    protected async refreshTasks(token: number, taskType?: string): Promise<void> {
+        const newProviderActivationNeeded = this.isTaskProviderActivationNeeded(taskType);
+        if (token !== this.currentToken || newProviderActivationNeeded) {
+            this.updateUserAction(token);
+            await this.activateProviders(taskType);
             const providers = await this.taskProviderRegistry.getProviders();
-            const providedTasks: TaskConfiguration[] = (await Promise.all(providers.map(p => p.provideTasks())))
-                .reduce((acc, taskArray) => acc.concat(taskArray), [])
-                // Global/User tasks from providers are not supported.
-                .filter(task => task.scope !== TaskScope.Global)
-                .map(providedTask => {
-                    const originalPresentation = providedTask.presentation || {};
-                    return {
-                        ...providedTask,
-                        presentation: {
-                            ...TaskOutputPresentation.getDefault(),
-                            ...originalPresentation
-                        }
-                    };
-                });
+
+            const providedTasks: TaskConfiguration[] = (await Promise.all(providers.map(p => this.resolveTaskConfigurations(p))))
+                .reduce((acc, taskArray) => acc.concat(taskArray), []);
             this.cacheTasks(providedTasks);
         }
+    }
+
+    protected async resolveTaskConfigurations(taskProvider: TaskProvider): Promise<TaskConfiguration[]> {
+        return (await taskProvider.provideTasks())
+            // Global/User tasks from providers are not supported.
+            .filter(task => task.scope !== TaskScope.Global)
+            .map(providedTask => {
+                const originalPresentation = providedTask.presentation || {};
+                return {
+                    ...providedTask,
+                    presentation: {
+                        ...TaskOutputPresentation.getDefault(),
+                        ...originalPresentation
+                    }
+                };
+            });
     }
 
     /** returns the task configuration for a given source and label or undefined if none */
@@ -99,14 +142,14 @@ export class ProvidedTaskConfigurations {
 
         const matchedTasks: TaskConfiguration[] = [];
         let highest = -1;
-        const tasks = await this.getTasks(token);
+        const tasks = await this.getTasks(token, customization.type);
         for (const task of tasks) { // find detected tasks that match the `definition`
-            let score = 0;
-            if (!definition.properties.required.every(requiredProp => customization[requiredProp] !== undefined)) {
+            const required = definition.properties.required || [];
+            if (!required.every(requiredProp => customization[requiredProp] !== undefined)) {
                 continue;
             }
-            score += definition.properties.required.length; // number of required properties
-            const requiredProps = new Set(definition.properties.required);
+            let score = required.length; // number of required properties
+            const requiredProps = new Set(required);
             // number of optional properties
             score += definition.properties.all.filter(p => !requiredProps.has(p) && customization[p] !== undefined).length;
             if (score >= highest) {

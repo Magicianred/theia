@@ -1,23 +1,23 @@
-/********************************************************************************
- * Copyright (C) 2020 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { Container } from 'inversify';
 import { ContributionProvider } from '../../common';
 import { CorePreferences } from '../core-preferences';
-import { FrontendApplicationContribution } from '../frontend-application';
+import { FrontendApplicationContribution } from '../frontend-application-contribution';
 import { DefaultWindowService } from './default-window-service';
 import assert = require('assert');
 
@@ -51,7 +51,7 @@ describe('DefaultWindowService', () => {
         ];
         const windowService = setupWindowService('never', frontendContributions);
         assert(frontendContributions.every(contribution => !contribution.onWillStopCalled), 'contributions should not be called yet');
-        assert(windowService.canUnload(), 'canUnload should return true');
+        assert(windowService['collectContributionUnloadVetoes']().length === 0, 'there should be no vetoes');
         assert(frontendContributions.every(contribution => contribution.onWillStopCalled), 'contributions should have been called');
     });
     it('onWillStop should be called on every contribution (ifRequired)', () => {
@@ -62,7 +62,7 @@ describe('DefaultWindowService', () => {
         ];
         const windowService = setupWindowService('ifRequired', frontendContributions);
         assert(frontendContributions.every(contribution => !contribution.onWillStopCalled), 'contributions should not be called yet');
-        assert(!windowService.canUnload(), 'canUnload should return false');
+        assert(windowService['collectContributionUnloadVetoes']().length > 0, 'There should be vetoes');
         assert(frontendContributions.every(contribution => contribution.onWillStopCalled), 'contributions should have been called');
     });
     it('onWillStop should be called on every contribution (always)', () => {
@@ -72,7 +72,7 @@ describe('DefaultWindowService', () => {
         ];
         const windowService = setupWindowService('always', frontendContributions);
         assert(frontendContributions.every(contribution => !contribution.onWillStopCalled), 'contributions should not be called yet');
-        assert(!windowService.canUnload(), 'canUnload should return false');
+        assert(windowService['collectContributionUnloadVetoes']().length > 0, 'there should be vetoes');
         assert(frontendContributions.every(contribution => contribution.onWillStopCalled), 'contributions should have been called');
     });
 });

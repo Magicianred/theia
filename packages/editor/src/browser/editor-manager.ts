@@ -1,27 +1,26 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, postConstruct, inject } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
-import { RecursivePartial, Emitter, Event } from '@theia/core/lib/common';
-import { WidgetOpenerOptions, NavigatableWidgetOpenHandler, NavigatableWidgetOptions } from '@theia/core/lib/browser';
+import { RecursivePartial, Emitter, Event, MaybePromise, CommandService, nls } from '@theia/core/lib/common';
+import { WidgetOpenerOptions, NavigatableWidgetOpenHandler, NavigatableWidgetOptions, Widget, PreferenceService, CommonCommands, OpenWithService } from '@theia/core/lib/browser';
 import { EditorWidget } from './editor-widget';
-import { Range, Position, Location } from './editor';
+import { Range, Position, Location, TextEditor } from './editor';
 import { EditorWidgetFactory } from './editor-widget-factory';
-import { TextEditor } from './editor';
 
 export interface WidgetId {
     id: number;
@@ -39,7 +38,7 @@ export class EditorManager extends NavigatableWidgetOpenHandler<EditorWidget> {
 
     readonly id = EditorWidgetFactory.ID;
 
-    readonly label = 'Code Editor';
+    readonly label = nls.localizeByDefault('Text Editor');
 
     protected readonly editorCounters = new Map<string, number>();
 
@@ -55,17 +54,22 @@ export class EditorManager extends NavigatableWidgetOpenHandler<EditorWidget> {
      */
     readonly onCurrentEditorChanged: Event<EditorWidget | undefined> = this.onCurrentEditorChangedEmitter.event;
 
+    @inject(CommandService) protected readonly commands: CommandService;
+    @inject(PreferenceService) protected readonly preferenceService: PreferenceService;
+    @inject(OpenWithService) protected readonly openWithService: OpenWithService;
+
     @postConstruct()
-    protected init(): void {
+    protected override init(): void {
         super.init();
         this.shell.onDidChangeActiveWidget(() => this.updateActiveEditor());
         this.shell.onDidChangeCurrentWidget(() => this.updateCurrentEditor());
+        this.shell.onDidDoubleClickMainArea(() =>
+            this.commands.executeCommand(CommonCommands.NEW_UNTITLED_TEXT_FILE.id)
+        );
         this.onCreated(widget => {
             widget.onDidChangeVisibility(() => {
                 if (widget.isVisible) {
                     this.addRecentlyVisible(widget);
-                } else {
-                    this.removeRecentlyVisible(widget);
                 }
                 this.updateCurrentEditor();
             });
@@ -81,31 +85,50 @@ export class EditorManager extends NavigatableWidgetOpenHandler<EditorWidget> {
                 this.addRecentlyVisible(widget);
             }
         }
+        this.openWithService.registerHandler({
+            id: this.id,
+            label: this.label,
+            providerName: nls.localizeByDefault('Built-in'),
+            // Higher priority than any other handler
+            // so that the text editor always appears first in the quick pick
+            canHandle: uri => this.canHandle(uri) * 100,
+            open: uri => this.open(uri)
+        });
         this.updateCurrentEditor();
     }
 
-    async getByUri(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget | undefined> {
+    override getByUri(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget | undefined> {
         return this.getWidget(uri, options);
     }
 
-    getOrCreateByUri(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget> {
+    override getOrCreateByUri(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget> {
         return this.getOrCreateWidget(uri, options);
     }
 
-    protected async getWidget(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget | undefined> {
-        const optionsWithCounter: EditorOpenerOptions = { counter: this.getCounterForUri(uri), ...options };
-        const editor = await super.getWidget(uri, optionsWithCounter);
+    protected override tryGetPendingWidget(uri: URI, options?: EditorOpenerOptions): MaybePromise<EditorWidget> | undefined {
+        const editorPromise = super.tryGetPendingWidget(uri, options);
+        if (editorPromise) {
+            // Reveal selection before attachment to manage nav stack. (https://github.com/eclipse-theia/theia/issues/8955)
+            if (!(editorPromise instanceof Widget)) {
+                editorPromise.then(editor => this.revealSelection(editor, options, uri));
+            } else {
+                this.revealSelection(editorPromise, options);
+            }
+        }
+        return editorPromise;
+    }
+
+    protected override async getWidget(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget | undefined> {
+        const editor = await super.getWidget(uri, options);
         if (editor) {
             // Reveal selection before attachment to manage nav stack. (https://github.com/eclipse-theia/theia/issues/8955)
-            this.revealSelection(editor, optionsWithCounter, uri);
+            this.revealSelection(editor, options, uri);
         }
         return editor;
     }
 
-    protected async getOrCreateWidget(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget> {
-        const counter = options?.counter === undefined ? this.getOrCreateCounterForUri(uri) : options.counter;
-        const optionsWithCounter: EditorOpenerOptions = { ...options, counter };
-        const editor = await super.getOrCreateWidget(uri, optionsWithCounter);
+    protected override async getOrCreateWidget(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget> {
+        const editor = await super.getOrCreateWidget(uri, options);
         // Reveal selection before attachment to manage nav stack. (https://github.com/eclipse-theia/theia/issues/8955)
         this.revealSelection(editor, options, uri);
         return editor;
@@ -143,7 +166,12 @@ export class EditorManager extends NavigatableWidgetOpenHandler<EditorWidget> {
     }
     protected updateActiveEditor(): void {
         const widget = this.shell.activeWidget;
-        this.setActiveEditor(widget instanceof EditorWidget ? widget : undefined);
+        if (widget instanceof EditorWidget) {
+            this.addRecentlyVisible(widget);
+            this.setActiveEditor(widget);
+        } else {
+            this.setActiveEditor(undefined);
+        }
     }
 
     protected _currentEditor: EditorWidget | undefined;
@@ -173,8 +201,37 @@ export class EditorManager extends NavigatableWidgetOpenHandler<EditorWidget> {
         return 100;
     }
 
-    // This override only serves to inform external callers that they can use EditorOpenerOptions.
-    open(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget> {
+    override open(uri: URI, options?: EditorOpenerOptions): Promise<EditorWidget> {
+        if (options?.counter === undefined) {
+            const insertionOptions = this.shell.getInsertionOptions(options?.widgetOptions);
+            // Definitely creating a new tabbar - no widget can match.
+            if (insertionOptions.addOptions.mode?.startsWith('split')) {
+                return super.open(uri, { counter: this.createCounterForUri(uri), ...options });
+            }
+            // Check the target tabbar for an existing widget.
+            const tabbar = insertionOptions.addOptions.ref && this.shell.getTabBarFor(insertionOptions.addOptions.ref);
+            if (tabbar) {
+                const currentUri = uri.toString();
+                for (const title of tabbar.titles) {
+                    if (title.owner instanceof EditorWidget) {
+                        const { uri: otherWidgetUri, id } = this.extractIdFromWidget(title.owner);
+                        if (otherWidgetUri === currentUri) {
+                            return super.open(uri, { counter: id, ...options });
+                        }
+                    }
+                }
+            }
+            // If the user has opted to prefer to open an existing editor even if it's on a different tab, check if we have anything about the URI.
+            if (this.preferenceService.get('workbench.editor.revealIfOpen', false)) {
+                const counter = this.getCounterForUri(uri);
+                if (counter !== undefined) {
+                    return super.open(uri, { counter, ...options });
+                }
+            }
+            // Open a new widget.
+            return super.open(uri, { counter: this.createCounterForUri(uri), ...options });
+        }
+
         return super.open(uri, options);
     }
 
@@ -219,6 +276,12 @@ export class EditorManager extends NavigatableWidgetOpenHandler<EditorWidget> {
 
     protected getSelection(widget: EditorWidget, selection: RecursivePartial<Range>): Range | Position | undefined {
         const { start, end } = selection;
+        if (Position.is(start)) {
+            if (Position.is(end)) {
+                return widget.editor.document.toValidRange({ start, end });
+            }
+            return widget.editor.document.toValidPosition(start);
+        }
         const line = start && start.line !== undefined && start.line >= 0 ? start.line : undefined;
         if (line === undefined) {
             return undefined;
@@ -278,18 +341,18 @@ export class EditorManager extends NavigatableWidgetOpenHandler<EditorWidget> {
     }
 
     protected getCounterForUri(uri: URI): number | undefined {
-        return this.editorCounters.get(uri.toString());
+        const idWithoutCounter = EditorWidgetFactory.createID(uri);
+        const counterOfMostRecentlyVisibleEditor = this.recentlyVisibleIds.find(id => id.startsWith(idWithoutCounter))?.slice(idWithoutCounter.length + 1);
+        return counterOfMostRecentlyVisibleEditor === undefined ? undefined : parseInt(counterOfMostRecentlyVisibleEditor);
     }
 
     protected getOrCreateCounterForUri(uri: URI): number {
         return this.getCounterForUri(uri) ?? this.createCounterForUri(uri);
     }
 
-    protected createWidgetOptions(uri: URI, options?: EditorOpenerOptions): NavigatableWidgetOptions {
+    protected override createWidgetOptions(uri: URI, options?: EditorOpenerOptions): NavigatableWidgetOptions {
         const navigatableOptions = super.createWidgetOptions(uri, options);
-        if (options?.counter !== undefined) {
-            navigatableOptions.counter = options.counter;
-        }
+        navigatableOptions.counter = options?.counter ?? this.getOrCreateCounterForUri(uri);
         return navigatableOptions;
     }
 }

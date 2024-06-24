@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import {
     TasksMain,
@@ -26,7 +26,7 @@ import { RPCProtocol } from '../../common/rpc-protocol';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common';
 import { TaskProviderRegistry, TaskResolverRegistry, TaskProvider, TaskResolver } from '@theia/task/lib/browser/task-contribution';
 import { interfaces } from '@theia/core/shared/inversify';
-import { TaskInfo, TaskExitedEvent, TaskConfiguration, TaskCustomization, TaskOutputPresentation, RevealKind, PanelKind } from '@theia/task/lib/common/task-protocol';
+import { TaskInfo, TaskExitedEvent, TaskConfiguration, TaskOutputPresentation, RevealKind, PanelKind } from '@theia/task/lib/common/task-protocol';
 import { TaskWatcher } from '@theia/task/lib/common/task-watcher';
 import { TaskService } from '@theia/task/lib/browser/task-service';
 import { TaskDefinitionRegistry } from '@theia/task/lib/browser';
@@ -97,6 +97,13 @@ export class TasksMainImpl implements TasksMain, Disposable {
                 this.proxy.$onDidEndTaskProcess(event.code, event.taskId);
             }
         }));
+
+        // Inform proxy about running tasks form previous session
+        this.$taskExecutions().then(executions => {
+            if (executions.length > 0) {
+                this.proxy.$initLoadedTasks(executions);
+            }
+        });
     }
 
     dispose(): void {
@@ -137,14 +144,7 @@ export class TasksMainImpl implements TasksMain, Disposable {
         for (const tasks of [configured, provided]) {
             for (const task of tasks) {
                 if (!taskType || (!!this.taskDefinitionRegistry.getDefinition(task) ? task._source === taskType : task.type === taskType)) {
-                    const { type, label, _scope, _source, ...properties } = task;
-                    const dto: TaskDto = { type, label, scope: _scope, source: _source };
-                    for (const key in properties) {
-                        if (properties.hasOwnProperty(key)) {
-                            dto[key] = properties[key];
-                        }
-                    }
-                    result.push(dto);
+                    result.push(this.fromTaskConfiguration(task));
                 }
             }
         }
@@ -184,8 +184,8 @@ export class TasksMainImpl implements TasksMain, Disposable {
     protected createTaskProvider(handle: number): TaskProvider {
         return {
             provideTasks: () =>
-                this.proxy.$provideTasks(handle).then(v =>
-                    v!.map(taskDto =>
+                this.proxy.$provideTasks(handle).then(tasks =>
+                    tasks.map(taskDto =>
                         this.toTaskConfiguration(taskDto)
                     )
                 )
@@ -195,24 +195,28 @@ export class TasksMainImpl implements TasksMain, Disposable {
     protected createTaskResolver(handle: number): TaskResolver {
         return {
             resolveTask: taskConfig =>
-                this.proxy.$resolveTask(handle, this.fromTaskConfiguration(taskConfig)).then(v =>
-                    this.toTaskConfiguration(v!)
+                this.proxy.$resolveTask(handle, this.fromTaskConfiguration(taskConfig)).then(task =>
+                    this.toTaskConfiguration(task)
                 )
         };
     }
 
     protected toTaskConfiguration(taskDto: TaskDto): TaskConfiguration {
-        const { group, presentation, scope, source, ...common } = taskDto;
+        const { group, presentation, scope, source, runOptions, ...common } = taskDto ?? {};
         const partialConfig: Partial<TaskConfiguration> = {};
         if (presentation) {
             partialConfig.presentation = this.convertTaskPresentation(presentation);
         }
-        if (group === 'build' || group === 'test') {
-            partialConfig.group = group;
+        if (group) {
+            partialConfig.group = {
+                kind: group.kind,
+                isDefault: group.isDefault
+            };
         }
         return {
             ...common,
             ...partialConfig,
+            runOptions,
             _scope: scope,
             _source: source,
         };
@@ -224,12 +228,13 @@ export class TasksMainImpl implements TasksMain, Disposable {
         if (presentation) {
             partialDto.presentation = this.convertTaskPresentation(presentation);
         }
-        if (group) {
-            if (TaskCustomization.isBuildTask(task)) {
-                partialDto.group = 'build';
-            } else if (TaskCustomization.isTestTask(task)) {
-                partialDto.group = 'test';
-            }
+        if (group === 'build' || group === 'test') {
+            partialDto.group = {
+                kind: group,
+                isDefault: false
+            };
+        } else if (typeof group === 'object') {
+            partialDto.group = group;
         }
         return {
             ...common,

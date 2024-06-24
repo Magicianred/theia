@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2020 RedHat and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 RedHat and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { Message } from '@theia/core/shared/@phosphor/messaging';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
@@ -25,13 +25,13 @@ import {
     PanelLayout
 } from '@theia/core/lib/browser';
 import { TimelineTreeWidget } from './timeline-tree-widget';
-import { TimelineService } from './timeline-service';
+import { TimelineService, TimelineAggregate } from './timeline-service';
 import { CommandRegistry, SelectionService } from '@theia/core/lib/common';
 import { TimelineEmptyWidget } from './timeline-empty-widget';
 import { toArray } from '@theia/core/shared/@phosphor/algorithm';
 import URI from '@theia/core/lib/common/uri';
 import { URI as CodeURI } from '@theia/core/shared/vscode-uri';
-import { TimelineAggregate } from './timeline-service';
+import { nls } from '@theia/core/lib/common/nls';
 
 @injectable()
 export class TimelineWidget extends BaseWidget {
@@ -51,7 +51,7 @@ export class TimelineWidget extends BaseWidget {
     constructor() {
         super();
         this.id = TimelineWidget.ID;
-        this.title.label = 'Timeline';
+        this.title.label = nls.localizeByDefault('Timeline');
         this.title.caption = this.title.label;
         this.addClass('theia-timeline');
     }
@@ -68,14 +68,14 @@ export class TimelineWidget extends BaseWidget {
 
         this.refresh();
         this.toDispose.push(this.timelineService.onDidChangeTimeline(event => {
-                const currentWidgetUri = this.getCurrentWidgetUri();
-                if (currentWidgetUri ) {
-                    this.loadTimeline(currentWidgetUri, event.reset);
-                }
-            })
+            const currentWidgetUri = this.getCurrentWidgetUri();
+            if (currentWidgetUri) {
+                this.loadTimeline(currentWidgetUri, event.reset);
+            }
+        })
         );
         this.toDispose.push(this.selectionService.onSelectionChanged(selection => {
-            if (Array.isArray(selection) && 'uri' in selection[0]) {
+            if (Array.isArray(selection) && !!selection[0] && 'uri' in selection[0]) {
                 this.refresh(selection[0].uri);
             }
         }));
@@ -155,21 +155,21 @@ export class TimelineWidget extends BaseWidget {
                 }
             });
         }
-        return  NavigatableWidget.is(current) ? current.getResourceUri() : undefined;
+        return NavigatableWidget.is(current) ? current.getResourceUri() : undefined;
     }
 
     protected get containerLayout(): PanelLayout | undefined {
         return this.panel.layout as PanelLayout;
     }
 
-    protected onUpdateRequest(msg: Message): void {
+    protected override onUpdateRequest(msg: Message): void {
         MessageLoop.sendMessage(this.resourceWidget, msg);
         MessageLoop.sendMessage(this.timelineEmptyWidget, msg);
         this.refresh();
         super.onUpdateRequest(msg);
     }
 
-    protected onAfterAttach(msg: Message): void {
+    protected override onAfterAttach(msg: Message): void {
         this.node.appendChild(this.resourceWidget.node);
         this.node.appendChild(this.timelineEmptyWidget.node);
         super.onAfterAttach(msg);

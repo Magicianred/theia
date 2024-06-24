@@ -1,30 +1,36 @@
-/********************************************************************************
- * Copyright (C) 2020 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
+
+
+
 
 // @ts-check
 describe('SCM', function () {
 
     const { assert } = chai;
 
+    const { animationFrame } = require('@theia/core/lib/browser/browser');
+    const { HostedPluginSupport } = require('@theia/plugin-ext/lib/hosted/browser/hosted-plugin');
     const Uri = require('@theia/core/lib/common/uri');
     const { ApplicationShell } = require('@theia/core/lib/browser/shell/application-shell');
     const { ContextKeyService } = require('@theia/core/lib/browser/context-key-service');
     const { ScmContribution } = require('@theia/scm/lib/browser/scm-contribution');
     const { ScmService } = require('@theia/scm/lib/browser/scm-service');
     const { ScmWidget } = require('@theia/scm/lib/browser/scm-widget');
+    const { CommandRegistry } = require('@theia/core/lib/common');
 
     /** @type {import('inversify').Container} */
     const container = window['theia'].container;
@@ -32,6 +38,8 @@ describe('SCM', function () {
     const scmContribution = container.get(ScmContribution);
     const shell = container.get(ApplicationShell);
     const service = container.get(ScmService);
+    const commandRegistry = container.get(CommandRegistry);
+    const pluginService = container.get(HostedPluginSupport);
 
     /** @type {ScmWidget} */
     let scmWidget;
@@ -39,10 +47,49 @@ describe('SCM', function () {
     /** @type {ScmService} */
     let scmService;
 
+    const gitPluginId = 'vscode.git';
+
+    /**
+         * @param {() => unknown} condition
+         * @param {number | undefined} [timeout]
+         * @param {string | undefined} [message]
+         * @returns {Promise<void>}
+         */
+    function waitForAnimation(condition, timeout, message) {
+        const success = new Promise(async (resolve, reject) => {
+            if (timeout === undefined) {
+                timeout = 100000;
+            }
+
+            let timedOut = false;
+            const handle = setTimeout(() => {
+                console.log(message);
+                timedOut = true;
+            }, timeout);
+
+            do {
+                await animationFrame();
+            } while (!timedOut && !condition());
+            if (timedOut) {
+                reject(new Error(message ?? 'Wait for animation timed out.'));
+            } else {
+                clearTimeout(handle);
+                resolve(undefined);
+            }
+
+        });
+        return success;
+    }
+
     beforeEach(async () => {
+        if (!pluginService.getPlugin(gitPluginId)) {
+            throw new Error(gitPluginId + ' should be started');
+        }
+        await pluginService.activatePlugin(gitPluginId);
         await shell.leftPanelHandler.collapse();
         scmWidget = await scmContribution.openView({ activate: true, reveal: true });
         scmService = service;
+        await waitForAnimation(() => scmService.selectedRepository, 10000, 'selected repository is not defined');
     });
 
     afterEach(() => {
@@ -53,7 +100,6 @@ describe('SCM', function () {
     });
 
     describe('scm-view', () => {
-
         it('the view should open and activate successfully', () => {
             assert.notEqual(scmWidget, undefined);
             assert.strictEqual(scmWidget, shell.activeWidget);
@@ -125,6 +171,9 @@ describe('SCM', function () {
                 const foundRepository = scmService.findRepository(new Uri.default(rootUri));
                 assert.notEqual(foundRepository, undefined);
             }
+            else {
+                assert.fail('Selected repository is undefined');
+            }
         });
 
         it('should not find a repository for an unknown uri', () => {
@@ -149,6 +198,9 @@ describe('SCM', function () {
                     const commit = await amendSupport.getLastCommit();
                     assert.notEqual(commit, undefined);
                 }
+            }
+            else {
+                assert.fail('Selected repository is undefined');
             }
         });
 

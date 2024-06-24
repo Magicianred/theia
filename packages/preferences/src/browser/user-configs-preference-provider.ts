@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2019 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -38,7 +38,11 @@ export class UserConfigsPreferenceProvider extends PreferenceProvider {
     protected readonly providers = new Map<string, UserPreferenceProvider>();
 
     @postConstruct()
-    protected async init(): Promise<void> {
+    protected init(): void {
+        this.doInit();
+    }
+
+    protected async doInit(): Promise<void> {
         this.createProviders();
 
         const readyPromises: Promise<void>[] = [];
@@ -59,7 +63,7 @@ export class UserConfigsPreferenceProvider extends PreferenceProvider {
         }
     }
 
-    getConfigUri(resourceUri?: string, sectionName: string = this.configurations.getConfigName()): URI | undefined {
+    override getConfigUri(resourceUri?: string, sectionName: string = this.configurations.getConfigName()): URI | undefined {
         for (const provider of this.providers.values()) {
             const configUri = provider.getConfigUri(resourceUri);
             if (configUri && this.configurations.getName(configUri) === sectionName) {
@@ -69,7 +73,7 @@ export class UserConfigsPreferenceProvider extends PreferenceProvider {
         return undefined;
     }
 
-    resolve<T>(preferenceName: string, resourceUri?: string): PreferenceResolveResult<T> {
+    override resolve<T>(preferenceName: string, resourceUri?: string): PreferenceResolveResult<T> {
         const result: PreferenceResolveResult<T> = {};
         for (const provider of this.providers.values()) {
             const { value, configUri } = provider.resolve<T>(preferenceName, resourceUri);
@@ -92,14 +96,24 @@ export class UserConfigsPreferenceProvider extends PreferenceProvider {
 
     async setPreference(preferenceName: string, value: any, resourceUri?: string): Promise<boolean> {
         const sectionName = preferenceName.split('.', 1)[0];
-        const configName = this.configurations.isSectionName(sectionName) ? sectionName : this.configurations.getConfigName();
+        const defaultConfigName = this.configurations.getConfigName();
+        const configName = this.configurations.isSectionName(sectionName) ? sectionName : defaultConfigName;
 
-        const providers = this.providers.values();
-
-        for (const provider of providers) {
-            if (this.configurations.getName(provider.getConfigUri()) === configName) {
-                return provider.setPreference(preferenceName, value, resourceUri);
+        const setWithConfigName = async (name: string): Promise<boolean> => {
+            for (const provider of this.providers.values()) {
+                if (this.configurations.getName(provider.getConfigUri()) === name) {
+                    if (await provider.setPreference(preferenceName, value, resourceUri)) {
+                        return true;
+                    }
+                }
             }
+            return false;
+        };
+
+        if (await setWithConfigName(configName)) { // Try in the section we believe it belongs in.
+            return true;
+        } else if (configName !== defaultConfigName) { // Fall back to `settings.json` if that fails.
+            return setWithConfigName(defaultConfigName);
         }
         return false;
     }

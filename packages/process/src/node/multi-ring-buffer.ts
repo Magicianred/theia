@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2017 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as stream from 'stream';
 import { inject, injectable } from '@theia/core/shared/inversify';
@@ -33,18 +33,18 @@ export class MultiRingBufferReadableStream extends stream.Readable implements Di
 
     constructor(protected readonly ringBuffer: MultiRingBuffer,
         protected readonly reader: number,
-        protected readonly encoding = 'utf8'
+        protected readonly encoding: BufferEncoding = 'utf8'
     ) {
         super();
         this.setEncoding(encoding);
     }
 
-    _read(size: number): void {
+    override _read(size: number): void {
         this.more = true;
         this.deq(size);
     }
 
-    _destroy(err: Error | null, callback: (err: Error | null) => void): void {
+    override _destroy(err: Error | null, callback: (err: Error | null) => void): void {
         this.ringBuffer.closeStream(this);
         this.ringBuffer.closeReader(this.reader);
         this.disposed = true;
@@ -81,7 +81,7 @@ export class MultiRingBufferReadableStream extends stream.Readable implements Di
 export const MultiRingBufferOptions = Symbol('MultiRingBufferOptions');
 export interface MultiRingBufferOptions {
     readonly size: number,
-    readonly encoding?: string,
+    readonly encoding?: BufferEncoding,
 }
 
 export interface WrappedPosition { newPos: number, wrap: boolean }
@@ -93,7 +93,7 @@ export class MultiRingBuffer implements Disposable {
     protected head: number = -1;
     protected tail: number = -1;
     protected readonly maxSize: number;
-    protected readonly encoding: string;
+    protected readonly encoding: BufferEncoding;
 
     /* <id, position> */
     protected readonly readers: Map<number, number>;
@@ -160,7 +160,7 @@ export class MultiRingBuffer implements Disposable {
         this.readers.delete(id);
     }
 
-    getStream(encoding?: string): MultiRingBufferReadableStream {
+    getStream(encoding?: BufferEncoding): MultiRingBufferReadableStream {
         const reader = this.getReader();
         const readableStream = new MultiRingBufferReadableStream(this, reader, encoding);
         this.streams.set(readableStream, reader);
@@ -185,7 +185,7 @@ export class MultiRingBuffer implements Disposable {
         }
     }
 
-    deq(id: number, size = -1, encoding = 'utf8'): string | undefined {
+    deq(id: number, size = -1, encoding: BufferEncoding = 'utf8'): string | undefined {
         const pos = this.readers.get(id);
         if (pos === undefined || pos === -1) {
             return undefined;

@@ -1,21 +1,23 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
+import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import {
     PLUGIN_RPC_CONTEXT,
+    AbstractPluginManagerExt,
     NotificationMain,
     MainMessageType,
     MessageRegistryMain,
@@ -26,19 +28,24 @@ import {
     ConfigStorage,
     PluginManagerInitializeParams,
     PluginManagerStartParams,
-    TerminalServiceExt
+    TerminalServiceExt,
+    LocalizationExt
 } from '../common/plugin-api-rpc';
 import { PluginMetadata, PluginJsonValidationContribution } from '../common/plugin-protocol';
 import * as theia from '@theia/plugin';
-import { join } from 'path';
+import * as types from './types-impl';
+import { join } from './path';
 import { EnvExtImpl } from './env';
 import { PreferenceRegistryExtImpl } from './preference-registry';
-import { Memento, KeyValueStorageProxy } from './plugin-storage';
+import { InternalStorageExt, Memento, GlobalState } from './plugin-storage';
 import { ExtPluginApi } from '../common/plugin-ext-api-contribution';
 import { RPCProtocol } from '../common/rpc-protocol';
 import { Emitter } from '@theia/core/lib/common/event';
 import { WebviewsExtImpl } from './webviews';
 import { URI as Uri } from './types-impl';
+import { InternalSecretsExt, SecretStorageExt } from '../plugin/secrets-ext';
+import { PluginExt } from './plugin-context';
+import { Deferred } from '@theia/core/lib/common/promise-util';
 
 export interface PluginHost {
 
@@ -72,21 +79,34 @@ class ActivatedPlugin {
     }
 }
 
-export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
+export const MinimalTerminalServiceExt = Symbol('MinimalTerminalServiceExt');
+export type MinimalTerminalServiceExt = Pick<TerminalServiceExt,
+    'getEnvironmentVariableCollection' | '$initEnvironmentVariableCollections' | '$setShell'>;
 
-    static SUPPORTED_ACTIVATION_EVENTS = new Set([
-        '*',
-        'onLanguage',
-        'onCommand',
-        'onDebug', 'onDebugInitialConfigurations', 'onDebugResolve', 'onDebugAdapterProtocolTracker',
-        'workspaceContains',
-        'onView',
-        'onUri',
-        'onWebviewPanel',
-        'onFileSystem',
-        'onCustomEditor',
-        'onStartupFinished'
-    ]);
+@injectable()
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export abstract class AbstractPluginManagerExtImpl<P extends Record<string, any>> implements AbstractPluginManagerExt<P>, PluginManager {
+
+    @inject(EnvExtImpl)
+    protected readonly envExt: EnvExtImpl;
+
+    @inject(MinimalTerminalServiceExt)
+    protected readonly terminalService: MinimalTerminalServiceExt;
+
+    @inject(InternalStorageExt)
+    protected readonly storage: InternalStorageExt;
+
+    @inject(InternalSecretsExt)
+    protected readonly secrets: InternalSecretsExt;
+
+    @inject(LocalizationExt)
+    protected readonly localization: LocalizationExt;
+
+    @inject(RPCProtocol)
+    protected readonly rpc: RPCProtocol;
+
+    // Cannot be Inversify-injected because it induces a dependency cycle
+    protected host: PluginHost;
 
     private configStorage: ConfigStorage | undefined;
     private readonly registry = new Map<string, Plugin>();
@@ -99,24 +119,21 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
     private onDidChangeEmitter = new Emitter<void>();
     private messageRegistryProxy: MessageRegistryMain;
     private notificationMain: NotificationMain;
-    protected fireOnDidChange(): void {
-        this.onDidChangeEmitter.fire(undefined);
-    }
 
     protected jsonValidation: PluginJsonValidationContribution[] = [];
+    protected ready = new Deferred();
 
-    constructor(
-        private readonly host: PluginHost,
-        private readonly envExt: EnvExtImpl,
-        private readonly terminalService: TerminalServiceExt,
-        private readonly storageProxy: KeyValueStorageProxy,
-        private readonly preferencesManager: PreferenceRegistryExtImpl,
-        private readonly webview: WebviewsExtImpl,
-        private readonly rpc: RPCProtocol
-    ) {
+    @postConstruct()
+    initialize(): void {
         this.messageRegistryProxy = this.rpc.getProxy(PLUGIN_RPC_CONTEXT.MESSAGE_REGISTRY_MAIN);
         this.notificationMain = this.rpc.getProxy(PLUGIN_RPC_CONTEXT.NOTIFICATION_MAIN);
     }
+
+    setPluginHost(pluginHost: PluginHost): void {
+        this.host = pluginHost;
+    }
+
+    abstract $init(params: P): Promise<void>;
 
     async $stop(pluginId?: string): Promise<void> {
         if (!pluginId) {
@@ -184,25 +201,6 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
         }
     }
 
-    async $init(params: PluginManagerInitializeParams): Promise<void> {
-        this.storageProxy.init(params.globalState, params.workspaceState);
-
-        this.envExt.setQueryParameters(params.env.queryParams);
-        this.envExt.setLanguage(params.env.language);
-        this.envExt.setShell(params.env.shell);
-        this.envExt.setUIKind(params.env.uiKind);
-        this.envExt.setApplicationName(params.env.appName);
-
-        this.preferencesManager.init(params.preferences);
-
-        if (params.extApi) {
-            this.host.initExtApi(params.extApi);
-        }
-
-        this.webview.init(params.webview);
-        this.jsonValidation = params.jsonValidation;
-    }
-
     async $start(params: PluginManagerStartParams): Promise<void> {
         this.configStorage = params.configStorage;
 
@@ -216,6 +214,8 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
             this.registerPlugin(plugin);
         }
 
+        // ensure plugins are registered before running activation events
+        this.ready.resolve();
         // run eager plugins
         await this.$activateByEvent('*');
         for (const activationEvent of params.activationEvents) {
@@ -231,23 +231,24 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
 
     protected registerPlugin(plugin: Plugin): void {
         if (plugin.model.id === 'vscode.json-language-features' && this.jsonValidation.length) {
-            // VS Code contribute all built-in validations via vscode.json-language-features
-            // we enrich them with Theia validations registered on the startup
-            // dynamic validations can be provided only via VS Code extensions
-            // content is fetched by the extension later via vscode.workspace.openTextDocument
+            // VS Code contributes all built-in validations via vscode.json-language-features;
+            // we enrich them with Theia validations registered on startup.
+            // Dynamic validations can be provided only via VS Code extensions.
+            // Content is fetched by the extension later via vscode.workspace.openTextDocument.
             const contributes = plugin.rawModel.contributes = (plugin.rawModel.contributes || {});
             contributes.jsonValidation = (contributes.jsonValidation || []).concat(this.jsonValidation);
         }
         this.registry.set(plugin.model.id, plugin);
-        if (plugin.pluginPath && Array.isArray(plugin.rawModel.activationEvents)) {
+        const activationEvents = this.getActivationEvents(plugin);
+        if (plugin.pluginPath && activationEvents) {
             const activation = () => this.$activatePlugin(plugin.model.id);
             // an internal activation event is a subject to change
             this.setActivation(`onPlugin:${plugin.model.id}`, activation);
-            const unsupportedActivationEvents = plugin.rawModel.activationEvents.filter(e => !PluginManagerExtImpl.SUPPORTED_ACTIVATION_EVENTS.has(e.split(':')[0]));
+            const unsupportedActivationEvents = activationEvents.filter(e => !this.isSupportedActivationEvent(e));
             if (unsupportedActivationEvents.length) {
                 console.warn(`Unsupported activation events: ${unsupportedActivationEvents.join(', ')}, please open an issue: https://github.com/eclipse-theia/theia/issues/new`);
             }
-            for (let activationEvent of plugin.rawModel.activationEvents) {
+            for (let activationEvent of activationEvents) {
                 if (activationEvent === 'onUri') {
                     activationEvent = `onUri:theia://${plugin.model.id}`;
                 }
@@ -255,6 +256,14 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
             }
         }
     }
+
+    protected getActivationEvents(plugin: Plugin): string[] | undefined {
+        const result = plugin.rawModel.activationEvents;
+        return Array.isArray(result) ? result : undefined;
+    }
+
+    protected abstract isSupportedActivationEvent(activationEvent: string): boolean;
+
     protected setActivation(activationEvent: string, activation: () => Promise<void>): void {
         const activations = this.activations.get(activationEvent) || [];
         activations.push(activation);
@@ -319,6 +328,21 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
     }
 
     async $activateByEvent(activationEvent: string): Promise<void> {
+        // Prevent the plugin manager from performing activations before plugins are registered
+        await this.ready.promise;
+        if (activationEvent.endsWith(':*')) {
+            const baseEvent = activationEvent.substring(0, activationEvent.length - 2);
+            await this.activateByBaseEvent(baseEvent);
+        } else {
+            await this.activateBySingleEvent(activationEvent);
+        }
+    }
+
+    protected async activateByBaseEvent(baseEvent: string): Promise<void> {
+        await Promise.all(Array.from(this.activations.keys(), activation => activation.startsWith(baseEvent) && this.activateBySingleEvent(activation)));
+    }
+
+    protected async activateBySingleEvent(activationEvent: string): Promise<void> {
         const activations = this.activations.get(activationEvent);
         if (!activations) {
             return;
@@ -344,20 +368,28 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
         const asAbsolutePath = (relativePath: string): string => join(plugin.pluginFolder, relativePath);
         const logPath = join(configStorage.hostLogPath, plugin.model.id); // todo check format
         const storagePath = configStorage.hostStoragePath ? join(configStorage.hostStoragePath, plugin.model.id) : undefined;
+        const secrets = new SecretStorageExt(plugin, this.secrets);
         const globalStoragePath = join(configStorage.hostGlobalStoragePath, plugin.model.id);
+        const extension = new PluginExt(this, plugin);
+        const extensionModeValue = plugin.isUnderDevelopment ? types.ExtensionMode.Development : types.ExtensionMode.Production;
+
         const pluginContext: theia.PluginContext = {
-            extensionPath: plugin.pluginFolder,
-            extensionUri: Uri.file(plugin.pluginFolder),
-            globalState: new Memento(plugin.model.id, true, this.storageProxy),
-            workspaceState: new Memento(plugin.model.id, false, this.storageProxy),
+            extensionPath: extension.extensionPath,
+            extensionUri: extension.extensionUri,
+            globalState: new GlobalState(plugin.model.id, true, this.storage),
+            workspaceState: new Memento(plugin.model.id, false, this.storage),
             subscriptions: subscriptions,
             asAbsolutePath: asAbsolutePath,
             logPath: logPath,
             storagePath: storagePath,
             storageUri: storagePath ? Uri.file(storagePath) : undefined,
+            secrets,
             globalStoragePath: globalStoragePath,
             globalStorageUri: Uri.file(globalStoragePath),
-            environmentVariableCollection: this.terminalService.getEnvironmentVariableCollection(plugin.model.id)
+            environmentVariableCollection: this.terminalService.getEnvironmentVariableCollection(plugin.model.id),
+            extensionMode: extensionModeValue,
+            extension,
+            logUri: Uri.file(logPath)
         };
         this.pluginContextsMap.set(plugin.model.id, pluginContext);
 
@@ -367,7 +399,9 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
         }
         const id = plugin.model.displayName || plugin.model.id;
         if (typeof pluginMain[plugin.lifecycle.startMethod] === 'function') {
+            await this.localization.initializeLocalizedMessages(plugin, this.envExt.language);
             const pluginExport = await pluginMain[plugin.lifecycle.startMethod].apply(getGlobal(), [pluginContext]);
+            console.log(`calling activation function on ${id}`);
             this.activatedPlugins.set(plugin.model.id, new ActivatedPlugin(pluginContext, pluginExport, stopFn));
         } else {
             // https://github.com/TypeFox/vscode/blob/70b8db24a37fafc77247de7f7cb5bb0195120ed0/src/vs/workbench/api/common/extHostExtensionService.ts#L400-L401
@@ -405,6 +439,50 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
 
     get onDidChange(): theia.Event<void> {
         return this.onDidChangeEmitter.event;
+    }
+
+    protected fireOnDidChange(): void {
+        this.onDidChangeEmitter.fire(undefined);
+    }
+
+}
+
+@injectable()
+export class PluginManagerExtImpl extends AbstractPluginManagerExtImpl<PluginManagerInitializeParams> implements PluginManagerExt {
+
+    @inject(PreferenceRegistryExtImpl)
+    protected readonly preferencesManager: PreferenceRegistryExtImpl;
+
+    @inject(WebviewsExtImpl)
+    protected readonly webview: WebviewsExtImpl;
+
+    private supportedActivationEvents: Set<string>;
+
+    async $init(params: PluginManagerInitializeParams): Promise<void> {
+        this.storage.init(params.globalState, params.workspaceState);
+
+        this.envExt.setQueryParameters(params.env.queryParams);
+        this.envExt.setUIKind(params.env.uiKind);
+        this.envExt.setLanguage(params.env.language);
+        this.terminalService.$setShell(params.env.shell);
+        this.envExt.setApplicationName(params.env.appName);
+        this.envExt.setAppHost(params.env.appHost);
+        this.envExt.setAppRoot(params.env.appRoot);
+
+        this.preferencesManager.init(params.preferences);
+
+        if (params.extApi) {
+            this.host.initExtApi(params.extApi);
+        }
+
+        this.webview.init(params.webview);
+        this.jsonValidation = params.jsonValidation;
+
+        this.supportedActivationEvents = new Set(params.supportedActivationEvents ?? []);
+    }
+
+    protected isSupportedActivationEvent(activationEvent: string): boolean {
+        return this.supportedActivationEvents.has(activationEvent.split(':')[0]);
     }
 
 }

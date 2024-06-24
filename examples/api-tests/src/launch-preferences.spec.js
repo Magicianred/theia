@@ -1,21 +1,21 @@
-/********************************************************************************
- * Copyright (C) 2019 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 // @ts-check
-/* eslint-disable no-unused-expressions, @typescript-eslint/no-explicit-any */
+/* @typescript-eslint/no-explicit-any */
 
 /**
  * @typedef {'.vscode' | '.theia' | ['.theia', '.vscode']} ConfigMode
@@ -26,24 +26,29 @@
  * See https://github.com/akosyakov/vscode-launch/blob/master/src/test/extension.test.ts
  */
 describe('Launch Preferences', function () {
-    this.timeout(5000);
+    this.timeout(10_000);
 
     const { assert } = chai;
 
+    const { PreferenceProvider } = require('@theia/core/lib/browser');
     const { PreferenceService, PreferenceScope } = require('@theia/core/lib/browser/preferences/preference-service');
     const { WorkspaceService } = require('@theia/workspace/lib/browser/workspace-service');
     const { FileService } = require('@theia/filesystem/lib/browser/file-service');
     const { FileResourceResolver } = require('@theia/filesystem/lib/browser/file-resource');
-    const { MonacoTextModelService } = require('@theia/monaco/lib/browser/monaco-text-model-service');
-    const { MonacoWorkspace } = require('@theia/monaco/lib/browser/monaco-workspace');
+    const { AbstractResourcePreferenceProvider } = require('@theia/preferences/lib/browser/abstract-resource-preference-provider');
+    const { waitForEvent } = require('@theia/core/lib/common/promise-util');
 
     const container = window.theia.container;
     /** @type {import('@theia/core/lib/browser/preferences/preference-service').PreferenceService} */
     const preferences = container.get(PreferenceService);
+    /** @type {import('@theia/preferences/lib/browser/user-configs-preference-provider').UserConfigsPreferenceProvider} */
+    const userPreferences = container.getNamed(PreferenceProvider, PreferenceScope.User);
+    /** @type {import('@theia/preferences/lib/browser/workspace-preference-provider').WorkspacePreferenceProvider} */
+    const workspacePreferences = container.getNamed(PreferenceProvider, PreferenceScope.Workspace);
+    /** @type {import('@theia/preferences/lib/browser/folders-preferences-provider').FoldersPreferencesProvider} */
+    const folderPreferences = container.getNamed(PreferenceProvider, PreferenceScope.Folder);
     const workspaceService = container.get(WorkspaceService);
     const fileService = container.get(FileService);
-    const textModelService = container.get(MonacoTextModelService);
-    const workspace = container.get(MonacoWorkspace);
     const fileResourceResolver = container.get(FileResourceResolver);
 
     const defaultLaunch = {
@@ -280,8 +285,8 @@ describe('Launch Preferences', function () {
         },
         expectation: {
             'version': '0.2.0',
-            'configurations': [validConfiguration, bogusConfiguration],
-            'compounds': [bogusCompound, bogusCompound2]
+            'configurations': [validConfiguration2, validConfiguration, bogusConfiguration],
+            'compounds': [validCompound, bogusCompound, bogusCompound2]
         }
     });
 
@@ -301,7 +306,7 @@ describe('Launch Preferences', function () {
         expectation: {
             'version': '0.2.0',
             'configurations': [validConfiguration2],
-            'compounds': [bogusCompound, bogusCompound2]
+            'compounds': [validCompound, bogusCompound, bogusCompound2]
         },
         inspectExpectation: {
             preferenceName: 'launch',
@@ -309,7 +314,7 @@ describe('Launch Preferences', function () {
             workspaceValue: {
                 'version': '0.2.0',
                 'configurations': [validConfiguration2],
-                'compounds': [bogusCompound, bogusCompound2]
+                'compounds': [validCompound, bogusCompound, bogusCompound2]
             }
         }
     });
@@ -394,25 +399,54 @@ describe('Launch Preferences', function () {
 
     const rootUri = workspaceService.tryGetRoots()[0].resource;
 
+    /**
+     * @param uri the URI of the file to modify
+     * @returns {AbstractResourcePreferenceProvider | undefined} The preference provider matching the provided URI.
+     */
+    function findProvider(uri) {
+        /**
+         * @param {PreferenceProvider} provider
+         * @returns {boolean} whether the provider matches the desired URI.
+         */
+        const isMatch = (provider) => {
+            const configUri = provider.getConfigUri();
+            return configUri && uri.isEqual(configUri);
+        };
+        for (const provider of userPreferences['providers'].values()) {
+            if (isMatch(provider) && provider instanceof AbstractResourcePreferenceProvider) {
+                return provider;
+            }
+        }
+        for (const provider of folderPreferences['providers'].values()) {
+            if (isMatch(provider) && provider instanceof AbstractResourcePreferenceProvider) {
+                return provider;
+            }
+        }
+        /** @type {PreferenceProvider} */
+        const workspaceDelegate = workspacePreferences['delegate'];
+        if (workspaceDelegate !== folderPreferences) {
+            if (isMatch(workspaceDelegate) && workspaceDelegate instanceof AbstractResourcePreferenceProvider) {
+                return workspaceDelegate;
+            }
+        }
+    }
+
     function deleteWorkspacePreferences() {
         const promises = [];
         for (const configPath of ['.theia', '.vscode']) {
             for (const name of ['settings', 'launch']) {
                 promises.push((async () => {
+                    const uri = rootUri.resolve(configPath + '/' + name + '.json');
+                    const provider = findProvider(uri);
                     try {
-                        const reference = await textModelService.createModelReference(rootUri.resolve(configPath + '/' + name + '.json'));
-                        try {
-                            if (!reference.object.valid) {
-                                return;
+                        if (provider) {
+                            if (provider.valid) {
+                                await waitForEvent(provider.onDidChangeValidity, 5000);
                             }
-                            await new Promise(resolve => {
-                                const listener = reference.object.onDidChangeValid(() => {
-                                    listener.dispose();
-                                    resolve();
-                                });
-                            });
-                        } finally {
-                            reference.dispose();
+                            await provider['readPreferencesFromFile']();
+                            await provider['fireDidPreferencesChanged']();
+                        } else {
+                            console.log('Unable to find provider for', uri.path.toString());
                         }
                     } catch (e) {
                         console.error(e);
@@ -426,6 +460,53 @@ describe('Launch Preferences', function () {
             fileService.delete(rootUri.resolve('.vscode'), { fromUserGesture: false, recursive: true }).catch(() => { })
         ]);
     }
+
+
+    function mergeLaunchConfigurations(config1, config2) {
+        if (config1 === undefined && config2 === undefined) {
+            return undefined;
+        }
+        if (config2 === undefined) {
+            return config1;
+        }
+
+        let result;
+        // skip invalid configs
+        if (typeof config1 === 'object' && !Array.isArray(config1)) {
+            result = { ...config1 };
+        }
+        if (typeof config2 === 'object' && !Array.isArray(config2)) {
+            result = { ...(result ?? {}), ...config2 }
+        }
+        // merge configurations and compounds arrays
+        const mergedConfigurations = mergeArrays(config1?.configurations, config2?.configurations);
+        if (mergedConfigurations) {
+            result.configurations = mergedConfigurations
+        }
+        const mergedCompounds = mergeArrays(config1?.compounds, config2?.compounds);
+        if (mergedCompounds) {
+            result.compounds = mergedCompounds;
+        }
+        return result;
+    }
+
+    function mergeArrays(array1, array2) {
+        if (array1 === undefined && array2 === undefined) {
+            return undefined;
+        }
+        if (!Array.isArray(array1) && !Array.isArray(array2)) {
+            return undefined;
+        }
+        let result = [];
+        if (Array.isArray(array1)) {
+            result = [...array1];
+        }
+        if (Array.isArray(array2)) {
+            result = [...result, ...array2];
+        }
+        return result;
+    }
+
 
     const originalShouldOverwrite = fileResourceResolver['shouldOverwrite'];
 
@@ -458,28 +539,25 @@ describe('Launch Preferences', function () {
         describe(JSON.stringify(configMode, undefined, 2), () => {
             const configPaths = Array.isArray(configMode) ? configMode : [configMode];
 
-            /** @typedef {monaco.editor.IReference<import('@theia/monaco/lib/browser/monaco-editor-model').MonacoEditorModel>} ConfigModelReference */
+            /** @typedef {import('@theia/monaco-editor-core/esm/vs/base/common/lifecycle').IReference<import('@theia/monaco/lib/browser/monaco-editor-model').MonacoEditorModel>} ConfigModelReference */
             /** @type {ConfigModelReference[]} */
             beforeEach(async () => {
                 /** @type {Promise<void>[]} */
                 const promises = [];
                 /**
                  * @param {string} name
-                 * @param {string} text
+                 * @param {Record<string, unknown>} value
                  */
-                const ensureConfigModel = (name, text) => {
+                const ensureConfigModel = (name, value) => {
                     for (const configPath of configPaths) {
                         promises.push((async () => {
                             try {
-                                const reference = await textModelService.createModelReference(rootUri.resolve(configPath + '/' + name + '.json'));
-                                try {
-                                    await workspace.applyBackgroundEdit(reference.object, [{
-                                        text,
-                                        range: reference.object.textEditorModel.getFullModelRange(),
-                                        forceMoveMarkers: false
-                                    }]);
-                                } finally {
-                                    reference.dispose();
+                                const uri = rootUri.resolve(configPath + '/' + name + '.json');
+                                const provider = findProvider(uri);
+                                if (provider) {
+                                    await provider['doSetPreference']('', [], value);
+                                } else {
+                                    console.log('Unable to find provider for', uri.path.toString());
                                 }
                             } catch (e) {
                                 console.error(e);
@@ -488,10 +566,10 @@ describe('Launch Preferences', function () {
                     }
                 };
                 if (settings) {
-                    ensureConfigModel('settings', JSON.stringify(settings));
+                    ensureConfigModel('settings', settings);
                 }
                 if (launch) {
-                    ensureConfigModel('launch', JSON.stringify(launch));
+                    ensureConfigModel('launch', launch);
                 }
                 await Promise.all(promises);
             });
@@ -529,8 +607,8 @@ describe('Launch Preferences', function () {
                         preferenceName: 'launch',
                         defaultValue: defaultLaunch
                     };
-                    const workspaceValue = launch || settingsLaunch;
-                    if (workspaceValue !== undefined) {
+                    const workspaceValue = mergeLaunchConfigurations(settingsLaunch, launch);
+                    if (workspaceValue !== undefined && JSON.stringify(workspaceValue) !== '{}') {
                         Object.assign(expected, { workspaceValue });
                     }
                 }
@@ -551,8 +629,8 @@ describe('Launch Preferences', function () {
                         workspaceFolderValue: inspectExpectation.workspaceValue
                     });
                 } else {
-                    const value = launch || settingsLaunch;
-                    if (value !== undefined) {
+                    const value = mergeLaunchConfigurations(settingsLaunch, launch);
+                    if (value !== undefined && JSON.stringify(value) !== '{}') {
                         Object.assign(expected, {
                             workspaceValue: value,
                             workspaceFolderValue: value
@@ -568,7 +646,7 @@ describe('Launch Preferences', function () {
 
                 const inspect = preferences.inspect('launch');
                 const actual = inspect && inspect.workspaceValue;
-                const expected = settingsLaunch && !Array.isArray(settingsLaunch) ? { ...settingsLaunch, ...validLaunch } : validLaunch;
+                const expected = mergeLaunchConfigurations(settingsLaunch, validLaunch);
                 assert.deepStrictEqual(actual, expected);
             });
 
@@ -577,7 +655,7 @@ describe('Launch Preferences', function () {
 
                 const inspect = preferences.inspect('launch');
                 const actual = inspect && inspect.workspaceValue;
-                const expected = settingsLaunch && !Array.isArray(settingsLaunch) ? { ...settingsLaunch, ...validLaunch } : validLaunch;
+                const expected = mergeLaunchConfigurations(settingsLaunch, validLaunch);
                 assert.deepStrictEqual(actual, expected);
             });
 
@@ -595,7 +673,7 @@ describe('Launch Preferences', function () {
 
                 const inspect = preferences.inspect('launch');
                 const actual = inspect && inspect.workspaceValue;
-                const expected = settingsLaunch && !Array.isArray(settingsLaunch) ? { ...settingsLaunch, ...validLaunch } : validLaunch;
+                const expected = mergeLaunchConfigurations(settingsLaunch, validLaunch);
                 assert.deepStrictEqual(actual, expected);
             });
 
@@ -605,7 +683,11 @@ describe('Launch Preferences', function () {
 
                     const inspect = preferences.inspect('launch');
                     const actual = inspect && inspect.workspaceValue && inspect.workspaceValue.configurations;
-                    assert.deepStrictEqual(actual, [validConfiguration, validConfiguration2]);
+                    let expect = [validConfiguration, validConfiguration2];
+                    if (Array.isArray(settingsLaunch?.configurations)) {
+                        expect = [...(settingsLaunch.configurations), ...expect]
+                    }
+                    assert.deepStrictEqual(actual, expect);
                 });
             }
 
@@ -619,11 +701,8 @@ describe('Launch Preferences', function () {
                     if (Array.isArray(expected)) {
                         expected = { ...expected };
                     }
-                    if (expected && !expected.configurations && settingsLaunch && settingsLaunch.configurations !== undefined) {
-                        expected.configurations = settingsLaunch.configurations;
-                    }
                 }
-                expected = expected || settingsLaunch;
+                expected = mergeLaunchConfigurations(settingsLaunch, expected);
                 assert.deepStrictEqual(actual && actual.workspaceValue, expected);
             });
 
@@ -634,32 +713,14 @@ describe('Launch Preferences', function () {
                     const actual = preferences.inspect('launch');
                     const actualWorkspaceValue = actual && actual.workspaceValue;
 
-                    let expected = undefined;
+                    let expected = { ...launch };
                     if (launch) {
-                        expected = { ...launch };
                         delete expected['configurations'];
                     }
-                    if (settings) {
-                        let _settingsLaunch = undefined;
-                        // eslint-disable-next-line no-null/no-null
-                        if (typeof settingsLaunch === 'object' && !Array.isArray(settings['launch']) && settings['launch'] !== null) {
-                            _settingsLaunch = settingsLaunch;
-                        } else {
-                            _settingsLaunch = expectation;
-                        }
-                        if (expected) {
-                            if (_settingsLaunch.configurations !== undefined) {
-                                expected.configurations = _settingsLaunch.configurations;
-                            }
-                        } else {
-                            expected = _settingsLaunch;
-                        }
-                    }
-
+                    expected = mergeLaunchConfigurations(settingsLaunch, expected);
                     assert.deepStrictEqual(actualWorkspaceValue, expected);
                 });
             }
-
         });
 
     }

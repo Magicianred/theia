@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2020 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
@@ -23,30 +23,33 @@ import {
     FileWriteOptions, FileOpenOptions, FileChangeType,
     FileSystemProviderCapabilities, FileChange, Stat, FileOverwriteOptions, WatchOptions, FileType, FileSystemProvider, FileDeleteOptions,
     hasOpenReadWriteCloseCapability, hasFileFolderCopyCapability, hasReadWriteCapability, hasAccessCapability,
-    FileSystemProviderError, FileSystemProviderErrorCode, FileUpdateOptions, hasUpdateCapability, FileUpdateResult, FileReadStreamOptions, hasFileReadStreamCapability
+    FileSystemProviderError, FileSystemProviderErrorCode, FileUpdateOptions, hasUpdateCapability, FileUpdateResult, FileReadStreamOptions, hasFileReadStreamCapability,
+    ReadOnlyMessageFileSystemProvider
 } from './files';
-import { JsonRpcServer, JsonRpcProxy, JsonRpcProxyFactory } from '@theia/core/lib/common/messaging/proxy-factory';
+import { RpcServer, RpcProxy, RpcProxyFactory } from '@theia/core/lib/common/messaging/proxy-factory';
 import { ApplicationError } from '@theia/core/lib/common/application-error';
 import { Deferred } from '@theia/core/lib/common/promise-util';
 import type { TextDocumentContentChangeEvent } from '@theia/core/shared/vscode-languageserver-protocol';
 import { newWriteableStream, ReadableStreamEvents } from '@theia/core/lib/common/stream';
 import { CancellationToken, cancelled } from '@theia/core/lib/common/cancellation';
+import { MarkdownString } from '@theia/core/lib/common/markdown-rendering';
 
 export const remoteFileSystemPath = '/services/remote-filesystem';
 
 export const RemoteFileSystemServer = Symbol('RemoteFileSystemServer');
-export interface RemoteFileSystemServer extends JsonRpcServer<RemoteFileSystemClient> {
+export interface RemoteFileSystemServer extends RpcServer<RemoteFileSystemClient> {
     getCapabilities(): Promise<FileSystemProviderCapabilities>
     stat(resource: string): Promise<Stat>;
+    getReadOnlyMessage(): Promise<MarkdownString | undefined>;
     access(resource: string, mode?: number): Promise<void>;
     fsPath(resource: string): Promise<string>;
     open(resource: string, opts: FileOpenOptions): Promise<number>;
     close(fd: number): Promise<void>;
-    read(fd: number, pos: number, length: number): Promise<{ bytes: number[]; bytesRead: number; }>;
+    read(fd: number, pos: number, length: number): Promise<{ bytes: Uint8Array; bytesRead: number; }>;
     readFileStream(resource: string, opts: FileReadStreamOptions, token: CancellationToken): Promise<number>;
-    readFile(resource: string): Promise<number[]>;
-    write(fd: number, pos: number, data: number[], offset: number, length: number): Promise<number>;
-    writeFile(resource: string, content: number[], opts: FileWriteOptions): Promise<void>;
+    readFile(resource: string): Promise<Uint8Array>;
+    write(fd: number, pos: number, data: Uint8Array, offset: number, length: number): Promise<number>;
+    writeFile(resource: string, content: Uint8Array, opts: FileWriteOptions): Promise<void>;
     delete(resource: string, opts: FileDeleteOptions): Promise<void>;
     mkdir(resource: string): Promise<void>;
     readdir(resource: string): Promise<[string, FileType][]>;
@@ -70,7 +73,8 @@ export interface RemoteFileSystemClient {
     notifyDidChangeFile(event: { changes: RemoteFileChange[] }): void;
     notifyFileWatchError(): void;
     notifyDidChangeCapabilities(capabilities: FileSystemProviderCapabilities): void;
-    onFileStreamData(handle: number, data: number[]): void;
+    notifyDidChangeReadOnlyMessage(readOnlyMessage: MarkdownString | undefined): void;
+    onFileStreamData(handle: number, data: Uint8Array): void;
     onFileStreamEnd(handle: number, error: RemoteFileStreamError | undefined): void;
 }
 
@@ -79,10 +83,10 @@ export const RemoteFileSystemProviderError = ApplicationError.declare(-33005,
         ({ message, data, stack })
 );
 
-export class RemoteFileSystemProxyFactory<T extends object> extends JsonRpcProxyFactory<T> {
+export class RemoteFileSystemProxyFactory<T extends object> extends RpcProxyFactory<T> {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    protected serializeError(e: any): any {
+    protected override serializeError(e: any): any {
         if (e instanceof FileSystemProviderError) {
             const { code, name } = e;
             return super.serializeError(RemoteFileSystemProviderError(e.message, { code, name }, e.stack));
@@ -91,7 +95,7 @@ export class RemoteFileSystemProxyFactory<T extends object> extends JsonRpcProxy
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    protected deserializeError(capturedError: Error, e: any): any {
+    protected override deserializeError(capturedError: Error, e: any): any {
         const error = super.deserializeError(capturedError, e);
         if (RemoteFileSystemProviderError.is(error)) {
             const fileOperationError = new FileSystemProviderError(error.message, error.data.code);
@@ -109,7 +113,7 @@ export class RemoteFileSystemProxyFactory<T extends object> extends JsonRpcProxy
  * Wraps the remote filesystem provider living on the backend.
  */
 @injectable()
-export class RemoteFileSystemProvider implements Required<FileSystemProvider>, Disposable {
+export class RemoteFileSystemProvider implements Required<FileSystemProvider>, Disposable, ReadOnlyMessageFileSystemProvider {
 
     private readonly onDidChangeFileEmitter = new Emitter<readonly FileChange[]>();
     readonly onDidChangeFile = this.onDidChangeFileEmitter.event;
@@ -120,6 +124,9 @@ export class RemoteFileSystemProvider implements Required<FileSystemProvider>, D
     private readonly onDidChangeCapabilitiesEmitter = new Emitter<void>();
     readonly onDidChangeCapabilities = this.onDidChangeCapabilitiesEmitter.event;
 
+    private readonly onDidChangeReadOnlyMessageEmitter = new Emitter<MarkdownString | undefined>();
+    readonly onDidChangeReadOnlyMessage = this.onDidChangeReadOnlyMessageEmitter.event;
+
     private readonly onFileStreamDataEmitter = new Emitter<[number, Uint8Array]>();
     private readonly onFileStreamData = this.onFileStreamDataEmitter.event;
 
@@ -129,6 +136,7 @@ export class RemoteFileSystemProvider implements Required<FileSystemProvider>, D
     protected readonly toDispose = new DisposableCollection(
         this.onDidChangeFileEmitter,
         this.onDidChangeCapabilitiesEmitter,
+        this.onDidChangeReadOnlyMessageEmitter,
         this.onFileStreamDataEmitter,
         this.onFileStreamEndEmitter
     );
@@ -143,8 +151,13 @@ export class RemoteFileSystemProvider implements Required<FileSystemProvider>, D
         options: WatchOptions
     }>();
 
-    private _capabilities: FileSystemProviderCapabilities = 0;
+    private _capabilities: FileSystemProviderCapabilities = FileSystemProviderCapabilities.None;
     get capabilities(): FileSystemProviderCapabilities { return this._capabilities; }
+
+    private _readOnlyMessage: MarkdownString | undefined = undefined;
+    get readOnlyMessage(): MarkdownString | undefined {
+        return this._readOnlyMessage;
+    }
 
     protected readonly readyDeferred = new Deferred<void>();
     readonly ready = this.readyDeferred.promise;
@@ -153,7 +166,7 @@ export class RemoteFileSystemProvider implements Required<FileSystemProvider>, D
      * Wrapped remote filesystem.
      */
     @inject(RemoteFileSystemServer)
-    protected readonly server: JsonRpcProxy<RemoteFileSystemServer>;
+    protected readonly server: RpcProxy<RemoteFileSystemServer>;
 
     @postConstruct()
     protected init(): void {
@@ -161,6 +174,9 @@ export class RemoteFileSystemProvider implements Required<FileSystemProvider>, D
             this._capabilities = capabilities;
             this.readyDeferred.resolve();
         }, this.readyDeferred.reject);
+        this.server.getReadOnlyMessage().then(readOnlyMessage => {
+            this._readOnlyMessage = readOnlyMessage;
+        });
         this.server.setClient({
             notifyDidChangeFile: ({ changes }) => {
                 this.onDidChangeFileEmitter.fire(changes.map(event => ({ resource: new URI(event.resource), type: event.type })));
@@ -169,7 +185,8 @@ export class RemoteFileSystemProvider implements Required<FileSystemProvider>, D
                 this.onFileWatchErrorEmitter.fire();
             },
             notifyDidChangeCapabilities: capabilities => this.setCapabilities(capabilities),
-            onFileStreamData: (handle, data) => this.onFileStreamDataEmitter.fire([handle, Uint8Array.from(data)]),
+            notifyDidChangeReadOnlyMessage: readOnlyMessage => this.setReadOnlyMessage(readOnlyMessage),
+            onFileStreamData: (handle, data) => this.onFileStreamDataEmitter.fire([handle, data]),
             onFileStreamEnd: (handle, error) => this.onFileStreamEndEmitter.fire([handle, error])
         });
         const onInitialized = this.server.onDidOpenConnection(() => {
@@ -186,6 +203,11 @@ export class RemoteFileSystemProvider implements Required<FileSystemProvider>, D
     protected setCapabilities(capabilities: FileSystemProviderCapabilities): void {
         this._capabilities = capabilities;
         this.onDidChangeCapabilitiesEmitter.fire(undefined);
+    }
+
+    protected setReadOnlyMessage(readOnlyMessage: MarkdownString | undefined): void {
+        this._readOnlyMessage = readOnlyMessage;
+        this.onDidChangeReadOnlyMessageEmitter.fire(readOnlyMessage);
     }
 
     // --- forwarding calls
@@ -224,7 +246,7 @@ export class RemoteFileSystemProvider implements Required<FileSystemProvider>, D
 
     async readFile(resource: URI): Promise<Uint8Array> {
         const bytes = await this.server.readFile(resource.toString());
-        return Uint8Array.from(bytes);
+        return bytes;
     }
 
     readFileStream(resource: URI, opts: FileReadStreamOptions, token: CancellationToken): ReadableStreamEvents<Uint8Array> {
@@ -264,11 +286,11 @@ export class RemoteFileSystemProvider implements Required<FileSystemProvider>, D
     }
 
     write(fd: number, pos: number, data: Uint8Array, offset: number, length: number): Promise<number> {
-        return this.server.write(fd, pos, [...data.values()], offset, length);
+        return this.server.write(fd, pos, data, offset, length);
     }
 
     writeFile(resource: URI, content: Uint8Array, opts: FileWriteOptions): Promise<void> {
-        return this.server.writeFile(resource.toString(), [...content.values()], opts);
+        return this.server.writeFile(resource.toString(), content, opts);
     }
 
     delete(resource: URI, opts: FileDeleteOptions): Promise<void> {
@@ -362,6 +384,14 @@ export class FileSystemProviderServer implements RemoteFileSystemServer {
                 this.client.notifyDidChangeCapabilities(this.provider.capabilities);
             }
         }));
+        if (ReadOnlyMessageFileSystemProvider.is(this.provider)) {
+            const providerWithReadOnlyMessage: ReadOnlyMessageFileSystemProvider = this.provider;
+            this.toDispose.push(this.provider.onDidChangeReadOnlyMessage(() => {
+                if (this.client) {
+                    this.client.notifyDidChangeReadOnlyMessage(providerWithReadOnlyMessage.readOnlyMessage);
+                }
+            }));
+        }
         this.toDispose.push(this.provider.onDidChangeFile(changes => {
             if (this.client) {
                 this.client.notifyDidChangeFile({
@@ -378,6 +408,14 @@ export class FileSystemProviderServer implements RemoteFileSystemServer {
 
     async getCapabilities(): Promise<FileSystemProviderCapabilities> {
         return this.provider.capabilities;
+    }
+
+    async getReadOnlyMessage(): Promise<MarkdownString | undefined> {
+        if (ReadOnlyMessageFileSystemProvider.is(this.provider)) {
+            return this.provider.readOnlyMessage;
+        } else {
+            return undefined;
+        }
     }
 
     stat(resource: string): Promise<Stat> {
@@ -412,34 +450,33 @@ export class FileSystemProviderServer implements RemoteFileSystemServer {
         throw new Error('not supported');
     }
 
-    async read(fd: number, pos: number, length: number): Promise<{ bytes: number[]; bytesRead: number; }> {
+    async read(fd: number, pos: number, length: number): Promise<{ bytes: Uint8Array; bytesRead: number; }> {
         if (hasOpenReadWriteCloseCapability(this.provider)) {
             const buffer = BinaryBuffer.alloc(this.BUFFER_SIZE);
             const bytes = buffer.buffer;
             const bytesRead = await this.provider.read(fd, pos, bytes, 0, length);
-            return { bytes: [...bytes.values()], bytesRead };
+            return { bytes, bytesRead };
         }
         throw new Error('not supported');
     }
 
-    write(fd: number, pos: number, data: number[], offset: number, length: number): Promise<number> {
+    write(fd: number, pos: number, data: Uint8Array, offset: number, length: number): Promise<number> {
         if (hasOpenReadWriteCloseCapability(this.provider)) {
-            return this.provider.write(fd, pos, Uint8Array.from(data), offset, length);
+            return this.provider.write(fd, pos, data, offset, length);
         }
         throw new Error('not supported');
     }
 
-    async readFile(resource: string): Promise<number[]> {
+    async readFile(resource: string): Promise<Uint8Array> {
         if (hasReadWriteCapability(this.provider)) {
-            const buffer = await this.provider.readFile(new URI(resource));
-            return [...buffer.values()];
+            return this.provider.readFile(new URI(resource));
         }
         throw new Error('not supported');
     }
 
-    writeFile(resource: string, content: number[], opts: FileWriteOptions): Promise<void> {
+    writeFile(resource: string, content: Uint8Array, opts: FileWriteOptions): Promise<void> {
         if (hasReadWriteCapability(this.provider)) {
-            return this.provider.writeFile(new URI(resource), Uint8Array.from(content), opts);
+            return this.provider.writeFile(new URI(resource), content, opts);
         }
         throw new Error('not supported');
     }
@@ -497,11 +534,10 @@ export class FileSystemProviderServer implements RemoteFileSystemServer {
         if (hasFileReadStreamCapability(this.provider)) {
             const handle = this.readFileStreamSeq++;
             const stream = this.provider.readFileStream(new URI(resource), opts, token);
-            stream.on('data', data => this.client?.onFileStreamData(handle, [...data.values()]));
+            stream.on('data', data => this.client?.onFileStreamData(handle, data));
             stream.on('error', error => {
                 const code = error instanceof FileSystemProviderError ? error.code : undefined;
                 const { name, message, stack } = error;
-                // eslint-disable-next-line no-unused-expressions
                 this.client?.onFileStreamEnd(handle, { code, name, message, stack });
             });
             stream.on('end', () => this.client?.onFileStreamEnd(handle, undefined));

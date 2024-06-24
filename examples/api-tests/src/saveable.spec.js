@@ -1,22 +1,22 @@
-/********************************************************************************
- * Copyright (C) 2020 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 // @ts-check
 describe('Saveable', function () {
-    this.timeout(5000);
+    this.timeout(30000);
 
     const { assert } = chai;
 
@@ -31,8 +31,10 @@ describe('Saveable', function () {
     const { MonacoEditor } = require('@theia/monaco/lib/browser/monaco-editor');
     const { Deferred } = require('@theia/core/lib/common/promise-util');
     const { Disposable, DisposableCollection } = require('@theia/core/lib/common/disposable');
+    const { Range } = require('@theia/monaco-editor-core/esm/vs/editor/common/core/range');
 
     const container = window.theia.container;
+    /** @type {EditorManager} */
     const editorManager = container.get(EditorManager);
     const workspaceService = container.get(WorkspaceService);
     const fileService = container.get(FileService);
@@ -64,11 +66,11 @@ describe('Saveable', function () {
 
     const toTearDown = new DisposableCollection();
 
-    /** @type {string | undefined} */
-    const autoSave = preferences.get('editor.autoSave', undefined, rootUri.toString());
+    /** @type {string | undefined} */
+    const autoSave = preferences.get('files.autoSave', undefined, rootUri.toString());
 
     beforeEach(async () => {
-        await preferences.set('editor.autoSave', 'off', undefined, rootUri.toString());
+        await preferences.set('files.autoSave', 'off', undefined, rootUri.toString());
         await preferences.set(closeOnFileDelete, true);
         await editorManager.closeAll({ save: false });
         await fileService.create(fileUri, 'foo', { fromUserGesture: false, overwrite: true });
@@ -79,13 +81,13 @@ describe('Saveable', function () {
 
     afterEach(async () => {
         toTearDown.dispose();
-        await preferences.set('editor.autoSave', autoSave, undefined, rootUri.toString());
         // @ts-ignore
         editor = undefined;
         // @ts-ignore
         widget = undefined;
         await editorManager.closeAll({ save: false });
         await fileService.delete(fileUri.parent, { fromUserGesture: false, useTrash: false, recursive: true });
+        await preferences.set('files.autoSave', autoSave, undefined, rootUri.toString());
     });
 
     it('normal save', async function () {
@@ -111,7 +113,7 @@ describe('Saveable', function () {
 
         // @ts-ignore
         editor.getControl().getModel().applyEdits([{
-            range: monaco.Range.fromPositions({ lineNumber: 1, column: 1 }, { lineNumber: 1, column: 4 }),
+            range: Range.fromPositions({ lineNumber: 1, column: 1 }, { lineNumber: 1, column: 4 }),
             forceMoveMarkers: false,
             text: ''
         }]);
@@ -243,7 +245,7 @@ describe('Saveable', function () {
             shouldSave: () => true
         });
         assert.isTrue(outOfSync, 'file should be out of sync');
-        assert.isTrue(widget.isDisposed, 'model should be disposed after close');
+        assert.isFalse(widget.isDisposed, 'model should not be disposed after close when we reject the save');
         const state = await fileService.read(fileUri);
         assert.equal(state.value, 'foo2', 'fs should NOT be updated');
     });
@@ -264,6 +266,17 @@ describe('Saveable', function () {
         assert.isTrue(widget.isDisposed, 'model should be disposed after close');
         const state = await fileService.read(fileUri);
         assert.equal(state.value.trimRight(), 'bar', 'fs should be updated');
+    });
+
+    it('no save prompt when multiple editors open for same file', async () => {
+        const secondWidget = await editorManager.openToSide(fileUri);
+        editor.getControl().setValue('two widgets');
+        assert.isTrue(Saveable.isDirty(widget), 'the first widget should be dirty');
+        assert.isTrue(Saveable.isDirty(secondWidget), 'the second widget should also be dirty');
+        await Promise.resolve(secondWidget.close());
+        assert.isTrue(secondWidget.isDisposed, 'the widget should have closed without requesting user action');
+        assert.isTrue(Saveable.isDirty(widget), 'the original widget should still be dirty.');
+        assert.equal(editor.getControl().getValue(), 'two widgets', 'should still have the same value');
     });
 
     it('normal close', async () => {
@@ -287,7 +300,7 @@ describe('Saveable', function () {
         try {
             await fileService.delete(fileUri);
             await waitForDidChangeTitle.promise;
-            assert.isTrue(widget.title.label.endsWith('(deleted)'), 'should be marked as deleted');
+            assert.isTrue(widget.title.label.endsWith('(Deleted)'), 'should be marked as deleted');
             assert.isTrue(Saveable.isDirty(widget), 'should be dirty after delete');
             assert.isFalse(widget.isDisposed, 'model should NOT be disposed after delete');
         } finally {
@@ -461,7 +474,7 @@ describe('Saveable', function () {
         try {
             await fileService.delete(fileUri);
             await waitForDidChangeTitle.promise;
-            assert.isTrue(widget.title.label.endsWith('(deleted)'));
+            assert.isTrue(widget.title.label.endsWith('(Deleted)'));
             assert.isFalse(widget.isDisposed);
         } finally {
             widget.title.changed.disconnect(listener);
@@ -475,10 +488,12 @@ describe('Saveable', function () {
         assert.isFalse(Saveable.isDirty(widget));
 
         const waitForDisposed = new Deferred();
+        // Must pass in 5 seconds, so check state after 4.5.
         const listener = editor.onDispose(() => waitForDisposed.resolve());
+        const fourSeconds = new Promise(resolve => setTimeout(resolve, 4500));
         try {
-            await fileService.delete(fileUri);
-            await waitForDisposed.promise;
+            const deleteThenDispose = fileService.delete(fileUri).then(() => waitForDisposed.promise);
+            await Promise.race([deleteThenDispose, fourSeconds]);
             assert.isTrue(widget.isDisposed);
         } finally {
             listener.dispose();

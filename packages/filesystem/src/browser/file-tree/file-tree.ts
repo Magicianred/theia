@@ -1,25 +1,24 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
+import { isObject, Mutable } from '@theia/core/lib/common';
 import { TreeNode, CompositeTreeNode, SelectableTreeNode, ExpandableTreeNode, TreeImpl } from '@theia/core/lib/browser';
-import { Mutable } from '@theia/core/lib/common/types';
 import { FileStat, Stat, FileType, FileOperationError, FileOperationResult } from '../../common/files';
-import { FileStat as DeprecatedFileStat } from '../../common/filesystem';
 import { UriSelection } from '@theia/core/lib/common/selection';
 import { MessageService } from '@theia/core/lib/common/message-service';
 import { FileSelection } from '../file-selection';
@@ -34,7 +33,7 @@ export class FileTree extends TreeImpl {
     @inject(MessageService)
     protected readonly messagingService: MessageService;
 
-    async resolveChildren(parent: CompositeTreeNode): Promise<TreeNode[]> {
+    override async resolveChildren(parent: CompositeTreeNode): Promise<TreeNode[]> {
         if (FileStatNode.is(parent)) {
             const fileStat = await this.resolveFileStat(parent);
             if (fileStat) {
@@ -102,8 +101,8 @@ export class FileTree extends TreeImpl {
 export interface FileStatNode extends SelectableTreeNode, Mutable<UriSelection>, FileSelection {
 }
 export namespace FileStatNode {
-    export function is(node: object | undefined): node is FileStatNode {
-        return !!node && 'fileStat' in node;
+    export function is(node: unknown): node is FileStatNode {
+        return isObject(node) && 'fileStat' in node;
     }
 
     export function getUri(node: TreeNode | undefined): string | undefined {
@@ -117,24 +116,24 @@ export namespace FileStatNode {
 export type FileStatNodeData = Omit<FileStatNode, 'uri' | 'fileStat'> & {
     uri: string
     stat?: Stat | { type: FileType } & Partial<Stat>
-    fileStat?: DeprecatedFileStat
+    fileStat?: FileStat
 };
 export namespace FileStatNodeData {
-    export function is(node: object | undefined): node is FileStatNodeData {
-        return !!node && 'uri' in node && ('fileStat' in node || 'stat' in node);
+    export function is(node: unknown): node is FileStatNodeData {
+        return isObject(node) && 'uri' in node && ('fileStat' in node || 'stat' in node);
     }
 }
 
 export type FileNode = FileStatNode;
 export namespace FileNode {
-    export function is(node: Object | undefined): node is FileNode {
+    export function is(node: unknown): node is FileNode {
         return FileStatNode.is(node) && !node.fileStat.isDirectory;
     }
 }
 
 export type DirNode = FileStatNode & ExpandableTreeNode;
 export namespace DirNode {
-    export function is(node: Object | undefined): node is DirNode {
+    export function is(node: unknown): node is DirNode {
         return FileStatNode.is(node) && node.fileStat.isDirectory;
     }
 

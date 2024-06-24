@@ -1,21 +1,21 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { CommandRegistry, Command, MenuModelRegistry, SelectionService, MessageService } from '@theia/core/lib/common';
-import { FrontendApplication, AbstractViewContribution } from '@theia/core/lib/browser';
+import { FrontendApplication, AbstractViewContribution, codicon, open, OpenerService } from '@theia/core/lib/browser';
 import { WidgetManager } from '@theia/core/lib/browser/widget-manager';
 import { EditorManager } from '@theia/editor/lib/browser';
 import { injectable, inject } from '@theia/core/shared/inversify';
@@ -23,7 +23,6 @@ import { GitDiffWidget, GIT_DIFF } from './git-diff-widget';
 import { GitCommitDetailWidget } from '../history/git-commit-detail-widget';
 import { GitDiffTreeModel } from './git-diff-tree-model';
 import { ScmService } from '@theia/scm/lib/browser/scm-service';
-import { open, OpenerService } from '@theia/core/lib/browser';
 import { NavigatorContextMenu, FileNavigatorContribution } from '@theia/navigator/lib/browser/navigator-contribution';
 import { UriCommandHandler } from '@theia/core/lib/common/uri-command-handler';
 import { GitQuickOpenService } from '../git-quick-open-service';
@@ -36,36 +35,41 @@ import { WorkspaceService } from '@theia/workspace/lib/browser';
 import { TabBarToolbarContribution, TabBarToolbarRegistry, TabBarToolbarItem } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 import { Emitter } from '@theia/core/lib/common/event';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
+import { nls } from '@theia/core/lib/common/nls';
 
 export namespace GitDiffCommands {
-    export const OPEN_FILE_DIFF: Command = {
+    export const OPEN_FILE_DIFF = Command.toLocalizedCommand({
         id: 'git-diff:open-file-diff',
         category: 'Git Diff',
         label: 'Compare With...'
-    };
+    }, 'theia/git/compareWith');
     export const TREE_VIEW_MODE = {
         id: 'git.viewmode.tree',
-        tooltip: 'Toggle to Tree View',
-        iconClass: 'codicon codicon-list-tree',
-        label: 'Toggle to Tree View',
+        tooltip: nls.localizeByDefault('View as Tree'),
+        iconClass: codicon('list-tree'),
+        originalLabel: 'View as Tree',
+        label: nls.localizeByDefault('View as Tree')
     };
     export const LIST_VIEW_MODE = {
         id: 'git.viewmode.list',
-        tooltip: 'Toggle to List View',
-        iconClass: 'codicon codicon-list-flat',
-        label: 'Toggle to List View',
+        tooltip: nls.localizeByDefault('View as List'),
+        iconClass: codicon('list-flat'),
+        originalLabel: 'View as List',
+        label: nls.localizeByDefault('View as List')
     };
     export const PREVIOUS_CHANGE = {
         id: 'git.navigate-changes.previous',
-        tooltip: 'Toggle to List View',
-        iconClass: 'fa fa-arrow-left',
-        label: 'Previous Change',
+        tooltip: nls.localizeByDefault('Previous Change'),
+        iconClass: codicon('arrow-left'),
+        originalLabel: 'Previous Change',
+        label: nls.localizeByDefault('Previous Change')
     };
     export const NEXT_CHANGE = {
         id: 'git.navigate-changes.next',
-        tooltip: 'Toggle to List View',
-        iconClass: 'fa fa-arrow-right',
-        label: 'Next Change',
+        tooltip: nls.localizeByDefault('Next Change'),
+        iconClass: codicon('arrow-right'),
+        originalLabel: 'Next Change',
+        label: nls.localizeByDefault('Next Change')
     };
 }
 
@@ -90,7 +94,7 @@ export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget>
 
     constructor(
         @inject(SelectionService) protected readonly selectionService: SelectionService,
-        @inject(WidgetManager) protected readonly widgetManager: WidgetManager,
+        @inject(WidgetManager) protected override readonly widgetManager: WidgetManager,
         @inject(FrontendApplication) protected readonly app: FrontendApplication,
         @inject(GitQuickOpenService) protected readonly quickOpenService: GitQuickOpenService,
         @inject(FileService) protected readonly fileService: FileService,
@@ -108,13 +112,13 @@ export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget>
         });
     }
 
-    registerMenus(menus: MenuModelRegistry): void {
+    override registerMenus(menus: MenuModelRegistry): void {
         menus.registerMenuAction(NavigatorContextMenu.COMPARE, {
             commandId: GitDiffCommands.OPEN_FILE_DIFF.id
         });
     }
 
-    registerCommands(commands: CommandRegistry): void {
+    override registerCommands(commands: CommandRegistry): void {
         commands.registerCommand(GitDiffCommands.OPEN_FILE_DIFF, this.newWorkspaceRootUriAwareCommandHandler({
             isVisible: uri => !!this.findGitRepository(uri),
             isEnabled: uri => !!this.findGitRepository(uri),
@@ -174,14 +178,12 @@ export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget>
         });
 
         const viewModeEmitter = new Emitter<void>();
-        /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-        const extractDiffWidget = (widget: any) => {
+        const extractDiffWidget = (widget: unknown) => {
             if (widget instanceof GitDiffWidget) {
                 return widget;
             }
         };
-        /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
-        const extractCommitDetailWidget = (widget: any) => {
+        const extractCommitDetailWidget = (widget: unknown) => {
             const ref = widget ? widget : this.editorManager.currentEditor;
             if (ref instanceof GitCommitDetailWidget) {
                 return ref;
@@ -196,6 +198,7 @@ export class GitDiffContribution extends AbstractViewContribution<GitDiffWidget>
                 tooltip: command.label,
                 onDidChange: viewModeEmitter.event
             };
+
             this.commandRegistry.registerCommand({ id, iconClass: command && command.iconClass }, {
                 execute: widget => {
                     const widgetWithChanges = extractDiffWidget(widget) || extractCommitDetailWidget(widget);

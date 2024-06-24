@@ -1,24 +1,24 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import throttle = require('@theia/core/shared/lodash.throttle');
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { Resource, MaybePromise } from '@theia/core';
 import { Navigatable } from '@theia/core/lib/browser/navigatable';
-import { BaseWidget, Message, addEventListener } from '@theia/core/lib/browser';
+import { BaseWidget, Message, addEventListener, codicon } from '@theia/core/lib/browser';
 import URI from '@theia/core/lib/common/uri';
 import { Event, Emitter } from '@theia/core/lib/common';
 import { PreviewHandler, PreviewHandlerProvider } from './preview-handler';
@@ -26,11 +26,11 @@ import { ThemeService } from '@theia/core/lib/browser/theming';
 import { EditorPreferences } from '@theia/editor/lib/browser';
 import { Disposable } from '@theia/core/lib/common/disposable';
 import { MonacoWorkspace } from '@theia/monaco/lib/browser/monaco-workspace';
-import { Range, Location } from '@theia/core/shared/vscode-languageserver-types';
+import { Range, Location } from '@theia/core/shared/vscode-languageserver-protocol';
 
 export const PREVIEW_WIDGET_CLASS = 'theia-preview-widget';
 
-const DEFAULT_ICON = 'fa fa-eye';
+const DEFAULT_ICON = codicon('eye');
 
 let widgetCounter: number = 0;
 
@@ -83,7 +83,7 @@ export class PreviewWidget extends BaseWidget implements Navigatable {
         this.scrollBeyondLastLine = !!this.editorPreferences['editor.scrollBeyondLastLine'];
         this.toDispose.push(this.editorPreferences.onPreferenceChanged(e => {
             if (e.preferenceName === 'editor.scrollBeyondLastLine') {
-                this.scrollBeyondLastLine = e.newValue;
+                this.scrollBeyondLastLine = Boolean(e.newValue);
                 this.forceUpdate();
             }
         }));
@@ -99,14 +99,14 @@ export class PreviewWidget extends BaseWidget implements Navigatable {
         this.toDispose.push(this.workspace.onDidOpenTextDocument(document => updateIfAffected(document.uri)));
         this.toDispose.push(this.workspace.onDidChangeTextDocument(params => updateIfAffected(params.model.uri)));
         this.toDispose.push(this.workspace.onDidCloseTextDocument(document => updateIfAffected(document.uri)));
-        this.toDispose.push(this.themeService.onThemeChange(() => this.update()));
+        this.toDispose.push(this.themeService.onDidColorThemeChange(() => this.update()));
         this.firstUpdate = () => {
             this.revealFragment(this.uri);
         };
         this.update();
     }
 
-    protected onBeforeAttach(msg: Message): void {
+    protected override onBeforeAttach(msg: Message): void {
         super.onBeforeAttach(msg);
         this.toDispose.push(this.startScrollSync());
         this.toDispose.push(this.startDoubleClickListener());
@@ -153,13 +153,13 @@ export class PreviewWidget extends BaseWidget implements Navigatable {
         return this.uri.withPath(resourceUri.path);
     }
 
-    onActivateRequest(msg: Message): void {
+    override onActivateRequest(msg: Message): void {
         super.onActivateRequest(msg);
         this.node.focus();
         this.update();
     }
 
-    onUpdateRequest(msg: Message): void {
+    override onUpdateRequest(msg: Message): void {
         super.onUpdateRequest(msg);
         this.performUpdate();
     }

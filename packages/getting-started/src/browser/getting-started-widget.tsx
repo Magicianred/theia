@@ -1,31 +1,31 @@
-/********************************************************************************
- * Copyright (C) 2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as React from '@theia/core/shared/react';
 import URI from '@theia/core/lib/common/uri';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
-import { ReactWidget } from '@theia/core/lib/browser/widgets/react-widget';
 import { CommandRegistry, isOSX, environment, Path } from '@theia/core/lib/common';
 import { WorkspaceCommands, WorkspaceService } from '@theia/workspace/lib/browser';
 import { KeymapsCommands } from '@theia/keymaps/lib/browser';
-import { CommonCommands, LabelProvider, Key, KeyCode } from '@theia/core/lib/browser';
+import { Message, ReactWidget, CommonCommands, LabelProvider, Key, KeyCode, codicon, PreferenceService } from '@theia/core/lib/browser';
 import { ApplicationInfo, ApplicationServer } from '@theia/core/lib/common/application-protocol';
 import { FrontendApplicationConfigProvider } from '@theia/core/lib/browser/frontend-application-config-provider';
 import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
+import { nls } from '@theia/core/lib/common/nls';
 
 /**
  * Default implementation of the `GettingStartedWidget`.
@@ -47,7 +47,7 @@ export class GettingStartedWidget extends ReactWidget {
     /**
      * The widget `label` which is used for display purposes.
      */
-    static readonly LABEL = 'Getting Started';
+    static readonly LABEL = nls.localizeByDefault('Welcome');
 
     /**
      * The `ApplicationInfo` for the application if available.
@@ -75,6 +75,7 @@ export class GettingStartedWidget extends ReactWidget {
      * Collection of useful links to display for end users.
      */
     protected readonly documentationUrl = 'https://www.theia-ide.org/docs/';
+    protected readonly compatibilityUrl = 'https://eclipse-theia.github.io/vscode-theia-comparator/status.html';
     protected readonly extensionUrl = 'https://www.theia-ide.org/docs/authoring_extensions';
     protected readonly pluginUrl = 'https://www.theia-ide.org/docs/authoring_plugins';
 
@@ -96,8 +97,15 @@ export class GettingStartedWidget extends ReactWidget {
     @inject(WorkspaceService)
     protected readonly workspaceService: WorkspaceService;
 
+    @inject(PreferenceService)
+    protected readonly preferenceService: PreferenceService;
+
     @postConstruct()
-    protected async init(): Promise<void> {
+    protected init(): void {
+        this.doInit();
+    }
+
+    protected async doInit(): Promise<void> {
         this.id = GettingStartedWidget.ID;
         this.title.label = GettingStartedWidget.LABEL;
         this.title.caption = GettingStartedWidget.LABEL;
@@ -109,37 +117,50 @@ export class GettingStartedWidget extends ReactWidget {
         this.update();
     }
 
+    protected override onActivateRequest(msg: Message): void {
+        super.onActivateRequest(msg);
+        const elArr = this.node.getElementsByTagName('a');
+        if (elArr && elArr.length > 0) {
+            (elArr[0] as HTMLElement).focus();
+        }
+    }
+
     /**
      * Render the content of the widget.
      */
     protected render(): React.ReactNode {
         return <div className='gs-container'>
-            {this.renderHeader()}
-            <hr className='gs-hr' />
-            <div className='flex-grid'>
-                <div className='col'>
-                    {this.renderOpen()}
+            <div className='gs-content-container'>
+                {this.renderHeader()}
+                <hr className='gs-hr' />
+                <div className='flex-grid'>
+                    <div className='col'>
+                        {this.renderStart()}
+                    </div>
+                </div>
+                <div className='flex-grid'>
+                    <div className='col'>
+                        {this.renderRecentWorkspaces()}
+                    </div>
+                </div>
+                <div className='flex-grid'>
+                    <div className='col'>
+                        {this.renderSettings()}
+                    </div>
+                </div>
+                <div className='flex-grid'>
+                    <div className='col'>
+                        {this.renderHelp()}
+                    </div>
+                </div>
+                <div className='flex-grid'>
+                    <div className='col'>
+                        {this.renderVersion()}
+                    </div>
                 </div>
             </div>
-            <div className='flex-grid'>
-                <div className='col'>
-                    {this.renderRecentWorkspaces()}
-                </div>
-            </div>
-            <div className='flex-grid'>
-                <div className='col'>
-                    {this.renderSettings()}
-                </div>
-            </div>
-            <div className='flex-grid'>
-                <div className='col'>
-                    {this.renderHelp()}
-                </div>
-            </div>
-            <div className='flex-grid'>
-                <div className='col'>
-                    {this.renderVersion()}
-                </div>
+            <div className='gs-preference-container'>
+                {this.renderPreferences()}
             </div>
         </div>;
     }
@@ -150,16 +171,26 @@ export class GettingStartedWidget extends ReactWidget {
      */
     protected renderHeader(): React.ReactNode {
         return <div className='gs-header'>
-            <h1>{this.applicationName}<span className='gs-sub-header'> Getting Started</span></h1>
+            <h1>{this.applicationName}<span className='gs-sub-header'>{' ' + GettingStartedWidget.LABEL}</span></h1>
         </div>;
     }
 
     /**
-     * Render the `open` section.
-     * Displays a collection of `open` commands.
+     * Render the `Start` section.
+     * Displays a collection of "start-to-work" related commands like `open` commands and some other.
      */
-    protected renderOpen(): React.ReactNode {
+    protected renderStart(): React.ReactNode {
         const requireSingleOpen = isOSX || !environment.electron.is();
+
+        const createFile = <div className='gs-action-container'>
+            <a
+                role={'button'}
+                tabIndex={0}
+                onClick={this.doCreateFile}
+                onKeyDown={this.doCreateFileEnter}>
+                {CommonCommands.NEW_UNTITLED_FILE.label ?? nls.localizeByDefault('New File...')}
+            </a>
+        </div>;
 
         const open = requireSingleOpen && <div className='gs-action-container'>
             <a
@@ -167,7 +198,7 @@ export class GettingStartedWidget extends ReactWidget {
                 tabIndex={0}
                 onClick={this.doOpen}
                 onKeyDown={this.doOpenEnter}>
-                Open
+                {nls.localizeByDefault('Open')}
             </a>
         </div>;
 
@@ -177,7 +208,7 @@ export class GettingStartedWidget extends ReactWidget {
                 tabIndex={0}
                 onClick={this.doOpenFile}
                 onKeyDown={this.doOpenFileEnter}>
-                Open File
+                {nls.localizeByDefault('Open File')}
             </a>
         </div>;
 
@@ -187,7 +218,7 @@ export class GettingStartedWidget extends ReactWidget {
                 tabIndex={0}
                 onClick={this.doOpenFolder}
                 onKeyDown={this.doOpenFolderEnter}>
-                Open Folder
+                {nls.localizeByDefault('Open Folder')}
             </a>
         </div>;
 
@@ -197,12 +228,13 @@ export class GettingStartedWidget extends ReactWidget {
                 tabIndex={0}
                 onClick={this.doOpenWorkspace}
                 onKeyDown={this.doOpenWorkspaceEnter}>
-                Open Workspace
+                {nls.localizeByDefault('Open Workspace')}
             </a>
         );
 
         return <div className='gs-section'>
-            <h3 className='gs-section-header'><i className='fa fa-folder-open'></i>Open</h3>
+            <h3 className='gs-section-header'><i className={codicon('folder-opened')}></i>{nls.localizeByDefault('Start')}</h3>
+            {createFile}
             {open}
             {openFile}
             {openFolder}
@@ -237,14 +269,24 @@ export class GettingStartedWidget extends ReactWidget {
                 tabIndex={0}
                 onClick={this.doOpenRecentWorkspace}
                 onKeyDown={this.doOpenRecentWorkspaceEnter}>
-                More...
+                {nls.localizeByDefault('More...')}
             </a>
         </div>;
         return <div className='gs-section'>
             <h3 className='gs-section-header'>
-                <i className='fa fa-clock-o'></i>Recent Workspaces
+                <i className={codicon('history')}></i>{nls.localizeByDefault('Recent')}
             </h3>
-            {items.length > 0 ? content : <p className='gs-no-recent'>No Recent Workspaces</p>}
+            {items.length > 0 ? content : <p className='gs-no-recent'>
+                {nls.localizeByDefault('You have no recent folders,') + ' '}
+                <a
+                    role={'button'}
+                    tabIndex={0}
+                    onClick={this.doOpenFolder}
+                    onKeyDown={this.doOpenFolderEnter}>
+                    {nls.localizeByDefault('open a folder')}
+                </a>
+                {' ' + nls.localizeByDefault('to start.')}
+            </p>}
             {more}
         </div>;
     }
@@ -256,8 +298,8 @@ export class GettingStartedWidget extends ReactWidget {
     protected renderSettings(): React.ReactNode {
         return <div className='gs-section'>
             <h3 className='gs-section-header'>
-                <i className='fa fa-cog'></i>
-                Settings
+                <i className={codicon('settings-gear')}></i>
+                {nls.localizeByDefault('Settings')}
             </h3>
             <div className='gs-action-container'>
                 <a
@@ -265,7 +307,7 @@ export class GettingStartedWidget extends ReactWidget {
                     tabIndex={0}
                     onClick={this.doOpenPreferences}
                     onKeyDown={this.doOpenPreferencesEnter}>
-                    Open Preferences
+                    {nls.localizeByDefault('Open Settings')}
                 </a>
             </div>
             <div className='gs-action-container'>
@@ -274,7 +316,7 @@ export class GettingStartedWidget extends ReactWidget {
                     tabIndex={0}
                     onClick={this.doOpenKeyboardShortcuts}
                     onKeyDown={this.doOpenKeyboardShortcutsEnter}>
-                    Open Keyboard Shortcuts
+                    {nls.localizeByDefault('Open Keyboard Shortcuts')}
                 </a>
             </div>
         </div>;
@@ -286,8 +328,8 @@ export class GettingStartedWidget extends ReactWidget {
     protected renderHelp(): React.ReactNode {
         return <div className='gs-section'>
             <h3 className='gs-section-header'>
-                <i className='fa fa-question-circle'></i>
-                Help
+                <i className={codicon('question')}></i>
+                {nls.localizeByDefault('Help')}
             </h3>
             <div className='gs-action-container'>
                 <a
@@ -295,7 +337,16 @@ export class GettingStartedWidget extends ReactWidget {
                     tabIndex={0}
                     onClick={() => this.doOpenExternalLink(this.documentationUrl)}
                     onKeyDown={(e: React.KeyboardEvent) => this.doOpenExternalLinkEnter(e, this.documentationUrl)}>
-                    Documentation
+                    {nls.localizeByDefault('Documentation')}
+                </a>
+            </div>
+            <div className='gs-action-container'>
+                <a
+                    role={'button'}
+                    tabIndex={0}
+                    onClick={() => this.doOpenExternalLink(this.compatibilityUrl)}
+                    onKeyDown={(e: React.KeyboardEvent) => this.doOpenExternalLinkEnter(e, this.compatibilityUrl)}>
+                    {nls.localize('theia/getting-started/apiComparator', '{0} API Compatibility', 'VS Code')}
                 </a>
             </div>
             <div className='gs-action-container'>
@@ -304,7 +355,7 @@ export class GettingStartedWidget extends ReactWidget {
                     tabIndex={0}
                     onClick={() => this.doOpenExternalLink(this.extensionUrl)}
                     onKeyDown={(e: React.KeyboardEvent) => this.doOpenExternalLinkEnter(e, this.extensionUrl)}>
-                    Building a New Extension
+                    {nls.localize('theia/getting-started/newExtension', 'Building a New Extension')}
                 </a>
             </div>
             <div className='gs-action-container'>
@@ -313,7 +364,7 @@ export class GettingStartedWidget extends ReactWidget {
                     tabIndex={0}
                     onClick={() => this.doOpenExternalLink(this.pluginUrl)}
                     onKeyDown={(e: React.KeyboardEvent) => this.doOpenExternalLinkEnter(e, this.pluginUrl)}>
-                    Building a New Plugin
+                    {nls.localize('theia/getting-started/newPlugin', 'Building a New Plugin')}
                 </a>
             </div>
         </div>;
@@ -326,10 +377,14 @@ export class GettingStartedWidget extends ReactWidget {
         return <div className='gs-section'>
             <div className='gs-action-container'>
                 <p className='gs-sub-header' >
-                    {this.applicationInfo ? 'Version ' + this.applicationInfo.version : ''}
+                    {this.applicationInfo ? nls.localizeByDefault('Version: {0}', this.applicationInfo.version) : ''}
                 </p>
             </div>
         </div>;
+    }
+
+    protected renderPreferences(): React.ReactNode {
+        return <WelcomePreferences preferenceService={this.preferenceService}></WelcomePreferences>;
     }
 
     /**
@@ -347,6 +402,16 @@ export class GettingStartedWidget extends ReactWidget {
         });
         return paths;
     }
+
+    /**
+     * Trigger the create file command.
+     */
+    protected doCreateFile = () => this.commandRegistry.executeCommand(CommonCommands.NEW_UNTITLED_FILE.id);
+    protected doCreateFileEnter = (e: React.KeyboardEvent) => {
+        if (this.isEnterKey(e)) {
+            this.doCreateFile();
+        }
+    };
 
     /**
      * Trigger the open command.
@@ -445,4 +510,41 @@ export class GettingStartedWidget extends ReactWidget {
     protected isEnterKey(e: React.KeyboardEvent): boolean {
         return Key.ENTER.keyCode === KeyCode.createKeyCode(e.nativeEvent).key?.keyCode;
     }
+}
+
+export interface PreferencesProps {
+    preferenceService: PreferenceService;
+}
+
+function WelcomePreferences(props: PreferencesProps): JSX.Element {
+    const [startupEditor, setStartupEditor] = React.useState<string>(
+        props.preferenceService.get('workbench.startupEditor', 'welcomePage')
+    );
+    React.useEffect(() => {
+        const prefListener = props.preferenceService.onPreferenceChanged(change => {
+            if (change.preferenceName === 'workbench.startupEditor') {
+                const prefValue = change.newValue;
+                setStartupEditor(prefValue);
+            }
+        });
+        return () => prefListener.dispose();
+    }, [props.preferenceService]);
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const newValue = e.target.checked ? 'welcomePage' : 'none';
+        props.preferenceService.updateValue('workbench.startupEditor', newValue);
+    };
+    return (
+        <div className='gs-preference'>
+            <input
+                type="checkbox"
+                className="theia-input"
+                id="startupEditor"
+                onChange={handleChange}
+                checked={startupEditor === 'welcomePage' || startupEditor === 'welcomePageInEmptyWorkbench'}
+            />
+            <label htmlFor="startupEditor">
+                {nls.localizeByDefault('Show welcome page on startup')}
+            </label>
+        </div>
+    );
 }

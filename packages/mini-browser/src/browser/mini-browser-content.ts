@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as PDFObject from 'pdfobject';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
@@ -24,7 +24,7 @@ import { KeybindingRegistry } from '@theia/core/lib/browser/keybinding';
 import { WindowService } from '@theia/core/lib/browser/window/window-service';
 import { parseCssTime, Key, KeyCode } from '@theia/core/lib/browser';
 import { DisposableCollection, Disposable } from '@theia/core/lib/common/disposable';
-import { BaseWidget, addEventListener } from '@theia/core/lib/browser/widgets/widget';
+import { BaseWidget, addEventListener, codiconArray } from '@theia/core/lib/browser/widgets/widget';
 import { LocationMapperService } from './location-mapper-service';
 import { ApplicationShellMouseTracker } from '@theia/core/lib/browser/shell/application-shell-mouse-tracker';
 
@@ -240,7 +240,7 @@ export class MiniBrowserContent extends BaseWidget {
         }
     }
 
-    protected onActivateRequest(msg: Message): void {
+    protected override onActivateRequest(msg: Message): void {
         super.onActivateRequest(msg);
         if (this.getToolbarProps() !== 'hide') {
             this.input.focus();
@@ -339,7 +339,7 @@ export class MiniBrowserContent extends BaseWidget {
         errorBar.style.display = 'none';
 
         const icon = document.createElement('span');
-        icon.classList.add('fa', 'problem-tab-icon');
+        icon.classList.add(...codiconArray('info'));
         errorBar.appendChild(icon);
 
         const message = document.createElement('span');
@@ -449,6 +449,7 @@ export class MiniBrowserContent extends BaseWidget {
     protected createInput(parent: HTMLElement): HTMLInputElement {
         const input = document.createElement('input');
         input.type = 'text';
+        input.spellcheck = false;
         input.classList.add('theia-input');
         this.toDispose.pushAll([
             addEventListener(input, 'keydown', this.handleInputChange.bind(this)),

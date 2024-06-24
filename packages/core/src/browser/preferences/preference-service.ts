@@ -1,30 +1,30 @@
-/********************************************************************************
- * Copyright (C) 2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { injectable, inject, postConstruct } from 'inversify';
-import { Event, Emitter, DisposableCollection, Disposable, deepFreeze } from '../../common';
+import { Event, Emitter, DisposableCollection, Disposable, deepFreeze, unreachable } from '../../common';
 import { Deferred } from '../../common/promise-util';
 import { PreferenceProvider, PreferenceProviderDataChange, PreferenceProviderDataChanges, PreferenceResolveResult } from './preference-provider';
 import { PreferenceSchemaProvider } from './preference-contribution';
 import URI from '../../common/uri';
 import { PreferenceScope } from './preference-scope';
 import { PreferenceConfigurations } from './preference-configurations';
-import { JSONExt } from '@phosphor/coreutils/lib/json';
+import { JSONExt, JSONValue } from '@phosphor/coreutils/lib/json';
 import { OverridePreferenceName, PreferenceLanguageOverrideService } from './preference-language-override-service';
 
 export { PreferenceScope };
@@ -33,23 +33,7 @@ export { PreferenceScope };
  * Representation of a preference change. A preference value can be set to `undefined` for a specific scope.
  * This means that the value from a more general scope will be used.
  */
-export interface PreferenceChange {
-    /**
-     * The name of the changed preference.
-     */
-    readonly preferenceName: string;
-    /**
-     * The new value of the changed preference.
-     */
-    readonly newValue?: any;
-    /**
-     * The old value of the changed preference.
-     */
-    readonly oldValue?: any;
-    /**
-     * The {@link PreferenceScope} of the changed preference.
-     */
-    readonly scope: PreferenceScope;
+export interface PreferenceChange extends PreferenceProviderDataChange {
     /**
      * Tests wether the given resource is affected by the preference change.
      * @param resourceUri the uri of the resource to test.
@@ -58,9 +42,10 @@ export interface PreferenceChange {
 }
 
 export class PreferenceChangeImpl implements PreferenceChange {
-    constructor(
-        private change: PreferenceProviderDataChange
-    ) { }
+    protected readonly change: PreferenceProviderDataChange;
+    constructor(change: PreferenceProviderDataChange) {
+        this.change = deepFreeze(change);
+    }
 
     get preferenceName(): string {
         return this.change.preferenceName;
@@ -73,6 +58,9 @@ export class PreferenceChangeImpl implements PreferenceChange {
     }
     get scope(): PreferenceScope {
         return this.change.scope;
+    }
+    get domain(): string[] | undefined {
+        return this.change.domain;
     }
 
     // TODO add tests
@@ -103,6 +91,10 @@ export interface PreferenceService extends Disposable {
      * Promise indicating whether the service successfully initialized.
      */
     readonly ready: Promise<void>;
+    /**
+     * Indicates whether the service has successfully initialized. Will be `true` when {@link PreferenceService.ready the `ready` Promise} resolves.
+     */
+    readonly isReady: boolean;
     /**
      * Retrieve the stored value for the given preference.
      *
@@ -183,10 +175,18 @@ export interface PreferenceService extends Disposable {
      *
      * @param preferenceName the preference identifier.
      * @param resourceUri the uri of the resource for which the preference is stored.
+     * @param forceLanguageOverride if `true` and `preferenceName` is a language override, only values for the specified override will be returned.
+     * Otherwise, values for the override will be returned where defined, and values from the base preference will be returned otherwise.
      *
      * @return an object containing the value of the given preference for all scopes.
      */
-    inspect<T>(preferenceName: string, resourceUri?: string): PreferenceInspection<T> | undefined;
+    inspect<T extends JSONValue>(preferenceName: string, resourceUri?: string, forceLanguageOverride?: boolean): PreferenceInspection<T> | undefined;
+    /**
+     * For behavior, see {@link PreferenceService.inspect}.
+     *
+     * @returns the value in the scope specified.
+     */
+    inspectInScope<T extends JSONValue>(preferenceName: string, scope: PreferenceScope, resourceUri?: string, forceLanguageOverride?: boolean): T | undefined
     /**
      * Returns a new preference identifier based on the given OverridePreferenceName.
      *
@@ -238,7 +238,7 @@ export interface PreferenceService extends Disposable {
 /**
  * Return type of the {@link PreferenceService.inspect} call.
  */
-export interface PreferenceInspection<T> {
+export interface PreferenceInspection<T = JSONValue> {
     /**
      * The preference identifier.
      */
@@ -264,6 +264,8 @@ export interface PreferenceInspection<T> {
      */
     value: T | undefined;
 }
+
+export type PreferenceInspectionScope = keyof Omit<PreferenceInspection<unknown>, 'preferenceName'>;
 
 /**
  * We cannot load providers directly in the case if they depend on `PreferenceService` somehow.
@@ -308,6 +310,7 @@ export class PreferenceServiceImpl implements PreferenceService {
                 await provider.ready;
             }
             this._ready.resolve();
+            this._isReady = true;
         } catch (e) {
             this._ready.reject(e);
         }
@@ -326,6 +329,11 @@ export class PreferenceServiceImpl implements PreferenceService {
     protected readonly _ready = new Deferred<void>();
     get ready(): Promise<void> {
         return this._ready.promise;
+    }
+
+    protected _isReady = false;
+    get isReady(): boolean {
+        return this._isReady;
     }
 
     protected reconcilePreferences(changes: PreferenceProviderDataChanges): void {
@@ -430,7 +438,7 @@ export class PreferenceServiceImpl implements PreferenceService {
         if (provider && await provider.setPreference(preferenceName, value, resourceUri)) {
             return;
         }
-        throw new Error(`Unable to write to ${PreferenceScope.getScopeNames(resolvedScope)[0]} Settings.`);
+        throw new Error(`Unable to write to ${PreferenceScope[resolvedScope]} Settings.`);
     }
 
     getBoolean(preferenceName: string): boolean | undefined;
@@ -469,20 +477,20 @@ export class PreferenceServiceImpl implements PreferenceService {
         return Number(value);
     }
 
-    inspect<T>(preferenceName: string, resourceUri?: string): PreferenceInspection<T> | undefined {
-        const defaultValue = this.inspectInScope<T>(preferenceName, PreferenceScope.Default, resourceUri);
-        const globalValue = this.inspectInScope<T>(preferenceName, PreferenceScope.User, resourceUri);
-        const workspaceValue = this.inspectInScope<T>(preferenceName, PreferenceScope.Workspace, resourceUri);
-        const workspaceFolderValue = this.inspectInScope<T>(preferenceName, PreferenceScope.Folder, resourceUri);
+    inspect<T extends JSONValue>(preferenceName: string, resourceUri?: string, forceLanguageOverride?: boolean): PreferenceInspection<T> | undefined {
+        const defaultValue = this.inspectInScope<T>(preferenceName, PreferenceScope.Default, resourceUri, forceLanguageOverride);
+        const globalValue = this.inspectInScope<T>(preferenceName, PreferenceScope.User, resourceUri, forceLanguageOverride);
+        const workspaceValue = this.inspectInScope<T>(preferenceName, PreferenceScope.Workspace, resourceUri, forceLanguageOverride);
+        const workspaceFolderValue = this.inspectInScope<T>(preferenceName, PreferenceScope.Folder, resourceUri, forceLanguageOverride);
 
         const valueApplied = workspaceFolderValue ?? workspaceValue ?? globalValue ?? defaultValue;
 
         return { preferenceName, defaultValue, globalValue, workspaceValue, workspaceFolderValue, value: valueApplied };
     }
 
-    protected inspectInScope<T>(preferenceName: string, scope: PreferenceScope, resourceUri?: string): T | undefined {
+    inspectInScope<T extends JSONValue>(preferenceName: string, scope: PreferenceScope, resourceUri?: string, forceLanguageOverride?: boolean): T | undefined {
         const value = this.doInspectInScope<T>(preferenceName, scope, resourceUri);
-        if (value === undefined) {
+        if (value === undefined && !forceLanguageOverride) {
             const overridden = this.overriddenPreferenceName(preferenceName);
             if (overridden) {
                 return this.doInspectInScope(overridden.preferenceName, scope, resourceUri);
@@ -502,7 +510,7 @@ export class PreferenceServiceImpl implements PreferenceService {
             case PreferenceScope.Folder:
                 return inspection.workspaceFolderValue;
         }
-        return ((unhandledScope: never): never => { throw new Error('Must handle all enum values!'); })(scope);
+        unreachable(scope, 'Not all PreferenceScope enum variants handled.');
     }
 
     async updateValue(preferenceName: string, value: any, resourceUri?: string): Promise<void> {
@@ -557,7 +565,7 @@ export class PreferenceServiceImpl implements PreferenceService {
         for (const scope of PreferenceScope.getScopes()) {
             if (this.schema.isValidInScope(preferenceName, scope)) {
                 const provider = this.getProvider(scope);
-                if (provider) {
+                if (provider?.canHandleScope(scope)) {
                     const { configUri, value } = provider.resolve<T>(preferenceName, resourceUri);
                     if (value !== undefined) {
                         result.configUri = configUri;

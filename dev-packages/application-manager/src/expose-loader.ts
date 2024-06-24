@@ -1,19 +1,20 @@
-/********************************************************************************
- * Copyright (C) 2020 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
+import * as fs from 'fs-extra';
 import * as path from 'path';
 // eslint-disable-next-line import/no-extraneous-dependencies
 import type { RawSourceMap } from 'source-map';
@@ -39,7 +40,7 @@ function exposeModule(modulePackage: { dir: string, name?: string }, resourcePat
     if (path.sep !== '/') {
         moduleName = moduleName.split(path.sep).join('/');
     }
-    return source + `\nif (!global) global = {};\n(global['theia'] = global['theia'] || {})['${moduleName}'] = this;\n`;
+    return source + `\n;(globalThis['theia'] = globalThis['theia'] || {})['${moduleName}'] = this;\n`;
 }
 
 /**
@@ -65,7 +66,7 @@ export = function (this: any, source: string, sourceMap?: RawSourceMap): string 
         let dir = this.resourcePath;
         while ((dir = path.dirname(dir)) !== nodeModulesPath) {
             try {
-                const { name } = require(path.join(dir, 'package.json'));
+                const { name } = fs.readJSONSync(path.join(dir, 'package.json'));
                 modulePackage = { name, dir };
                 modulePackages.push(modulePackage);
                 this.callback(undefined, exposeModule(modulePackage, this.resourcePath, source), sourceMap);

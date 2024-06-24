@@ -1,27 +1,28 @@
-/********************************************************************************
- * Copyright (C) 2020 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as theia from '@theia/plugin';
 import { RPCProtocol } from '../common/rpc-protocol';
 import { CommandRegistryImpl } from './command-registry';
 import { UriComponents } from '../common/uri-components';
-import { URI } from './types-impl';
+import { CommentThreadCollapsibleState, CommentThreadState, URI } from './types-impl';
 import {
     Range,
     Comment,
+    CommentThreadState as CommentThreadStateModel,
     CommentThreadCollapsibleState as CommentThreadCollapsibleStateModel,
     CommentOptions
 } from '../common/plugin-api-rpc-model';
@@ -29,7 +30,6 @@ import { DocumentsExtImpl } from './documents';
 import { Emitter } from '@theia/core/lib/common/event';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { fromMarkdown, fromRange, toRange } from './type-converters';
-import { CommentThreadCollapsibleState } from './types-impl';
 import {
     CommentsCommandArg, CommentsContextCommandArg, CommentsEditCommandArg,
     CommentsExt,
@@ -172,7 +172,7 @@ export class CommentsExtImpl implements CommentsExt {
 
         const documentData = this._documents.getDocumentData(URI.revive(uriComponents));
         if (documentData) {
-            const ranges: theia.Range[] | undefined = await commentController.commentingRangeProvider!.provideCommentingRanges(documentData.document, token);
+            const ranges: theia.Range[] | undefined | null = await commentController.commentingRangeProvider!.provideCommentingRanges(documentData.document, token);
             if (ranges) {
                 return ranges.map(x => fromRange(x));
             }
@@ -186,6 +186,8 @@ type CommentThreadModification = Partial<{
     contextValue: string | undefined,
     comments: theia.Comment[],
     collapsibleState: theia.CommentThreadCollapsibleState
+    state: theia.CommentThreadState
+    canReply: boolean;
 }>;
 
 export class ExtHostCommentThread implements theia.CommentThread, theia.Disposable {
@@ -276,12 +278,37 @@ export class ExtHostCommentThread implements theia.CommentThread, theia.Disposab
         this._onDidUpdateCommentThread.fire();
     }
 
+    private _state?: theia.CommentThreadState;
+
+    get state(): theia.CommentThreadState {
+        return this._state!;
+    }
+
+    set state(newState: theia.CommentThreadState) {
+        if (this._state !== newState) {
+            this._state = newState;
+            this.modifications.state = newState;
+            this._onDidUpdateCommentThread.fire();
+        }
+    }
+
     private localDisposables: Disposable[];
 
     private _isDisposed: boolean;
 
     public get isDisposed(): boolean {
         return this._isDisposed;
+    }
+
+    private _canReply: boolean = true;
+    get canReply(): boolean {
+        return this._canReply;
+    }
+
+    set canReply(canReply: boolean) {
+        this._canReply = canReply;
+        this.modifications.canReply = canReply;
+        this._onDidUpdateCommentThread.fire();
     }
 
     private commentsMap: Map<theia.Comment, number> = new Map<theia.Comment, number>();
@@ -341,10 +368,16 @@ export class ExtHostCommentThread implements theia.CommentThread, theia.Disposab
         }
         if (modified('comments')) {
             formattedModifications.comments =
-                this._comments.map(cmt => convertToModeComment(this, this.commentController, cmt, this.commentsMap));
+                this._comments.map(comment => convertToModeComment(this, this.commentController, comment, this.commentsMap));
         }
         if (modified('collapsibleState')) {
             formattedModifications.collapseState = convertToCollapsibleState(this.collapseState);
+        }
+        if (modified('state')) {
+            formattedModifications.state = convertToState(this._state);
+        }
+        if (modified('canReply')) {
+            formattedModifications.canReply = this.canReply;
         }
         this.modifications = {};
 
@@ -477,6 +510,7 @@ function convertToModeComment(thread: ExtHostCommentThread, commentController: C
     }
 
     const iconPath = theiaComment.author && theiaComment.author.iconPath ? theiaComment.author.iconPath.toString() : undefined;
+    const date = theiaComment.timestamp ? theiaComment.timestamp.toISOString() : undefined;
 
     return {
         mode: theiaComment.mode,
@@ -486,6 +520,7 @@ function convertToModeComment(thread: ExtHostCommentThread, commentController: C
         userName: theiaComment.author.name,
         userIconPath: iconPath,
         label: theiaComment.label,
+        timestamp: date,
     };
 }
 
@@ -499,4 +534,16 @@ function convertToCollapsibleState(kind: theia.CommentThreadCollapsibleState | u
         }
     }
     return CommentThreadCollapsibleStateModel.Collapsed;
+}
+
+function convertToState(kind: theia.CommentThreadState | undefined): CommentThreadStateModel {
+    if (kind !== undefined) {
+        switch (kind) {
+            case CommentThreadState.Resolved:
+                return CommentThreadStateModel.Resolved;
+            case CommentThreadState.Unresolved:
+                return CommentThreadStateModel.Unresolved;
+        }
+    }
+    return CommentThreadStateModel.Unresolved;
 }

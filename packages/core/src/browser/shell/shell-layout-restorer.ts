@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, named } from 'inversify';
 import { Widget } from '@phosphor/widgets';
@@ -23,8 +23,11 @@ import { ILogger } from '../../common/logger';
 import { CommandContribution, CommandRegistry, Command } from '../../common/command';
 import { ThemeService } from '../theming';
 import { ContributionProvider } from '../../common/contribution-provider';
-import { MaybePromise } from '../../common/types';
 import { ApplicationShell, applicationShellLayoutVersion, ApplicationShellLayoutVersion } from './application-shell';
+import { CommonCommands } from '../common-frontend-contribution';
+import { WindowService } from '../window/window-service';
+import { StopReason } from '../../common/frontend-application-state';
+import { isFunction, isObject, MaybePromise } from '../../common';
 
 /**
  * A contract for widgets that want to store and restore their inner state, between sessions.
@@ -43,9 +46,8 @@ export interface StatefulWidget {
 }
 
 export namespace StatefulWidget {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    export function is(arg: any): arg is StatefulWidget {
-        return arg !== undefined && typeof arg['storeState'] === 'function' && typeof arg['restoreState'] === 'function';
+    export function is(arg: unknown): arg is StatefulWidget {
+        return isObject<StatefulWidget>(arg) && isFunction(arg.storeState) && isFunction(arg.restoreState);
     }
 }
 
@@ -109,11 +111,11 @@ export interface ApplicationShellLayoutMigration {
     onWillInflateWidget?(desc: WidgetDescription, context: ApplicationShellLayoutMigrationContext): MaybePromise<WidgetDescription | undefined>;
 }
 
-export const RESET_LAYOUT: Command = {
+export const RESET_LAYOUT = Command.toLocalizedCommand({
     id: 'reset.layout',
-    category: 'View',
+    category: CommonCommands.VIEW_CATEGORY,
     label: 'Reset Workbench Layout'
-};
+}, 'theia/core/resetWorkbenchLayout', CommonCommands.VIEW_CATEGORY_KEY);
 
 @injectable()
 export class ShellLayoutRestorer implements CommandContribution {
@@ -121,8 +123,9 @@ export class ShellLayoutRestorer implements CommandContribution {
     protected storageKey = 'layout';
     protected shouldStoreLayout: boolean = true;
 
-    @inject(ContributionProvider) @named(ApplicationShellLayoutMigration)
-    protected readonly migrations: ContributionProvider<ApplicationShellLayoutMigration>;
+    @inject(ContributionProvider) @named(ApplicationShellLayoutMigration) protected readonly migrations: ContributionProvider<ApplicationShellLayoutMigration>;
+    @inject(WindowService) protected readonly windowService: WindowService;
+    @inject(ThemeService) protected readonly themeService: ThemeService;
 
     constructor(
         @inject(WidgetManager) protected widgetManager: WidgetManager,
@@ -136,12 +139,14 @@ export class ShellLayoutRestorer implements CommandContribution {
     }
 
     protected async resetLayout(): Promise<void> {
-        this.logger.info('>>> Resetting layout...');
-        this.shouldStoreLayout = false;
-        this.storageService.setData(this.storageKey, undefined);
-        ThemeService.get().reset(); // Theme service cannot use DI, so the current theme ID is stored elsewhere. Hence the explicit reset.
-        this.logger.info('<<< The layout has been successfully reset.');
-        window.location.reload(true);
+        if (await this.windowService.isSafeToShutDown(StopReason.Reload)) {
+            this.logger.info('>>> Resetting layout...');
+            this.shouldStoreLayout = false;
+            this.storageService.setData(this.storageKey, undefined);
+            this.themeService.reset();
+            this.logger.info('<<< The layout has been successfully reset.');
+            this.windowService.reload();
+        }
     }
 
     storeLayout(app: FrontendApplication): void {
@@ -227,11 +232,7 @@ export class ShellLayoutRestorer implements CommandContribution {
         const parseContext = new ShellLayoutRestorer.ParseContext();
         const layout = this.parse<ApplicationShell.LayoutData>(layoutData, parseContext);
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        let layoutVersion: number | any;
-        try {
-            layoutVersion = 'version' in layout && Number(layout.version);
-        } catch { /* no-op */ }
+        const layoutVersion = Number(layout.version);
         if (typeof layoutVersion !== 'number' || Number.isNaN(layoutVersion)) {
             throw new Error('could not resolve a layout version');
         }
@@ -277,13 +278,12 @@ export class ShellLayoutRestorer implements CommandContribution {
                     });
                 }
                 return widgets;
-            } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const copy: any = {};
+            } else if (isObject(value) && !Array.isArray(value)) {
+                const copy: Record<string, unknown> = {};
                 for (const p in value) {
                     if (this.isWidgetProperty(p)) {
                         parseContext.push(async context => {
-                            copy[p] = await this.convertToWidget(value[p], context);
+                            copy[p] = await this.convertToWidget(value[p] as WidgetDescription, context);
                         });
                     } else {
                         copy[p] = value[p];
@@ -301,7 +301,7 @@ export class ShellLayoutRestorer implements CommandContribution {
                 // don't catch exceptions, if one migration fails all should fail.
                 const migrated = await migration.onWillInflateWidget(desc, context);
                 if (migrated) {
-                    if (migrated.innerWidgetState && typeof migrated.innerWidgetState !== 'string') {
+                    if (isObject(migrated.innerWidgetState)) {
                         // in order to inflate nested widgets
                         migrated.innerWidgetState = JSON.stringify(migrated.innerWidgetState);
                     }

@@ -1,22 +1,23 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, named, injectable } from 'inversify';
 import { Widget } from '@phosphor/widgets';
 import { ILogger, Emitter, Event, ContributionProvider, MaybePromise, WaitUntilEvent } from '../common';
+import stableJsonStringify = require('fast-json-stable-stringify');
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export const WidgetFactory = Symbol('WidgetFactory');
@@ -113,7 +114,6 @@ export class WidgetManager {
 
     protected _cachedFactories: Map<string, WidgetFactory>;
     protected readonly widgets = new Map<string, Widget>();
-    protected readonly widgetPromises = new Map<string, MaybePromise<Widget>>();
     protected readonly pendingWidgetPromises = new Map<string, MaybePromise<Widget>>();
 
     @inject(ContributionProvider) @named(WidgetFactory)
@@ -155,14 +155,29 @@ export class WidgetManager {
      * @param options The widget factory specific information.
      *
      * @returns the widget if available, else `undefined`.
+     *
+     * The widget is 'available' if it has been created with the same {@link factoryId} and {@link options} by the {@link WidgetManager}.
+     * If the widget's creation is asynchronous, it is only available when the associated `Promise` is resolved.
      */
     tryGetWidget<T extends Widget>(factoryId: string, options?: any): T | undefined {
         const key = this.toKey({ factoryId, options });
-        const existing = this.widgetPromises.get(key);
+        const existing = this.widgets.get(key);
         if (existing instanceof Widget) {
             return existing as T;
         }
         return undefined;
+    }
+
+    /**
+     * Try to get the existing widget for the given description.
+     * @param factoryId The widget factory id.
+     * @param options The widget factory specific information.
+     *
+     * @returns A promise that resolves to the widget, if any exists. The promise may be pending, so be cautious when assuming that it will not reject.
+     */
+    tryGetPendingWidget<T extends Widget>(factoryId: string, options?: any): MaybePromise<T> | undefined {
+        const key = this.toKey({ factoryId, options });
+        return this.doGetWidget(key);
     }
 
     /**
@@ -179,8 +194,33 @@ export class WidgetManager {
         return widget;
     }
 
+    /**
+     * Finds a widget that matches the given test predicate.
+     * @param factoryId The widget factory id.
+     * @param predicate The test predicate.
+     *
+     * @returns a promise resolving to the widget if available, else `undefined`.
+     */
+    async findWidget<T extends Widget>(factoryId: string, predicate: (options?: any) => boolean): Promise<T | undefined> {
+        for (const [key, widget] of this.widgets.entries()) {
+            if (this.testPredicate(key, factoryId, predicate)) {
+                return widget as T;
+            }
+        }
+        for (const [key, widget] of this.pendingWidgetPromises.entries()) {
+            if (this.testPredicate(key, factoryId, predicate)) {
+                return widget as T;
+            }
+        }
+    }
+
+    protected testPredicate(key: string, factoryId: string, predicate: (options?: any) => boolean): boolean {
+        const constructionOptions = this.fromKey(key);
+        return constructionOptions.factoryId === factoryId && predicate(constructionOptions.options);
+    }
+
     protected doGetWidget<T extends Widget>(key: string): MaybePromise<T> | undefined {
-        const pendingWidget = this.widgetPromises.get(key) || this.pendingWidgetPromises.get(key);
+        const pendingWidget = this.widgets.get(key) ?? this.pendingWidgetPromises.get(key);
         if (pendingWidget) {
             return pendingWidget as MaybePromise<T>;
         }
@@ -209,12 +249,8 @@ export class WidgetManager {
             this.pendingWidgetPromises.set(key, widgetPromise);
             const widget = await widgetPromise;
             await WaitUntilEvent.fire(this.onWillCreateWidgetEmitter, { factoryId, widget });
-            this.widgetPromises.set(key, widgetPromise);
             this.widgets.set(key, widget);
-            widget.disposed.connect(() => {
-                this.widgets.delete(key);
-                this.widgetPromises.delete(key);
-            });
+            widget.disposed.connect(() => this.widgets.delete(key));
             this.onDidCreateWidgetEmitter.fire({ factoryId, widget });
             return widget as T;
         } finally {
@@ -244,7 +280,7 @@ export class WidgetManager {
      * @returns the widget construction options represented as a string.
      */
     protected toKey(options: WidgetConstructionOptions): string {
-        return JSON.stringify(options);
+        return stableJsonStringify(options);
     }
 
     /**

@@ -1,37 +1,39 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import '../../src/browser/style/output.css';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { toArray } from '@theia/core/shared/@phosphor/algorithm';
-import { IDragEvent } from '@theia/core/shared/@phosphor/dragdrop';
 import { EditorWidget } from '@theia/editor/lib/browser';
 import { MonacoEditor } from '@theia/monaco/lib/browser/monaco-editor';
 import { SelectionService } from '@theia/core/lib/common/selection-service';
 import { MonacoEditorProvider } from '@theia/monaco/lib/browser/monaco-editor-provider';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
-import { Message, BaseWidget, DockPanel, Widget, MessageLoop, StatefulWidget } from '@theia/core/lib/browser';
+import { Message, BaseWidget, DockPanel, Widget, MessageLoop, StatefulWidget, codicon } from '@theia/core/lib/browser';
 import { OutputUri } from '../common/output-uri';
-import { OutputChannelManager, OutputChannel } from '../common/output-channel';
+import { OutputChannelManager, OutputChannel } from './output-channel';
 import { Emitter, Event, deepClone } from '@theia/core';
+import { nls } from '@theia/core/lib/common/nls';
+import * as monaco from '@theia/monaco-editor-core';
 
 @injectable()
 export class OutputWidget extends BaseWidget implements StatefulWidget {
 
     static readonly ID = 'outputView';
+    static readonly LABEL = nls.localizeByDefault('Output');
 
     @inject(SelectionService)
     protected readonly selectionService: SelectionService;
@@ -50,9 +52,9 @@ export class OutputWidget extends BaseWidget implements StatefulWidget {
     constructor() {
         super();
         this.id = OutputWidget.ID;
-        this.title.label = 'Output';
-        this.title.caption = 'Output';
-        this.title.iconClass = 'fa fa-flag';
+        this.title.label = OutputWidget.LABEL;
+        this.title.caption = OutputWidget.LABEL;
+        this.title.iconClass = codicon('output');
         this.title.closable = true;
         this.addClass('theia-output');
         this.node.tabIndex = 0;
@@ -124,13 +126,13 @@ export class OutputWidget extends BaseWidget implements StatefulWidget {
         }
     }
 
-    protected onAfterAttach(message: Message): void {
+    protected override onAfterAttach(message: Message): void {
         super.onAfterAttach(message);
         Widget.attach(this.editorContainer, this.node);
         this.toDisposeOnDetach.push(Disposable.create(() => Widget.detach(this.editorContainer)));
     }
 
-    protected onActivateRequest(message: Message): void {
+    protected override onActivateRequest(message: Message): void {
         super.onActivateRequest(message);
         if (this.editor) {
             this.editor.focus();
@@ -139,7 +141,7 @@ export class OutputWidget extends BaseWidget implements StatefulWidget {
         }
     }
 
-    protected onResize(message: Widget.ResizeMessage): void {
+    protected override onResize(message: Widget.ResizeMessage): void {
         super.onResize(message);
         MessageLoop.sendMessage(this.editorContainer, Widget.ResizeMessage.UnknownSize);
         for (const widget of toArray(this.editorContainer.widgets())) {
@@ -147,7 +149,7 @@ export class OutputWidget extends BaseWidget implements StatefulWidget {
         }
     }
 
-    protected onAfterShow(msg: Message): void {
+    protected override onAfterShow(msg: Message): void {
         super.onAfterShow(msg);
         this.onResize(Widget.ResizeMessage.UnknownSize); // Triggers an editor widget resize. (#8361)
     }
@@ -246,23 +248,9 @@ export namespace OutputWidget {
 }
 
 /**
- * @deprecated Use `OutputWidget.ID` instead.
- */
-export const OUTPUT_WIDGET_KIND = OutputWidget.ID;
-
-/**
  * Customized `DockPanel` that does not allow dropping widgets into it.
- * Intercepts `'p-dragover'` events, and sets the desired drop action to `'none'`.
  */
-class NoopDragOverDockPanel extends DockPanel {
-
-    constructor(options?: DockPanel.IOptions) {
-        super(options);
-        NoopDragOverDockPanel.prototype['_evtDragOver'] = (event: IDragEvent) => {
-            event.preventDefault();
-            event.stopPropagation();
-            event.dropAction = 'none';
-        };
-    }
-
-}
+class NoopDragOverDockPanel extends DockPanel { }
+NoopDragOverDockPanel.prototype['_evtDragOver'] = () => { };
+NoopDragOverDockPanel.prototype['_evtDrop'] = () => { };
+NoopDragOverDockPanel.prototype['_evtDragLeave'] = () => { };

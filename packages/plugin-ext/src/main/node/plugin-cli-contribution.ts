@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2019 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable } from '@theia/core/shared/inversify';
 import { Argv, Arguments } from '@theia/core/shared/yargs';
@@ -24,6 +24,7 @@ export class PluginCliContribution implements CliContribution {
 
     static PLUGINS = 'plugins';
     static PLUGIN_MAX_SESSION_LOGS_FOLDERS = 'plugin-max-session-logs-folders';
+    static UNCOMPRESSED_PLUGINS_IN_PLACE = 'uncompressed-plugins-in-place';
     /**
      * This is the default value used in VSCode, see:
      * - https://github.com/Microsoft/vscode/blob/613447d6b3f458ef7fee227e3876303bf5184580/src/vs/code/electron-browser/sharedProcess/contrib/logsDataCleaner.ts#L32
@@ -32,6 +33,7 @@ export class PluginCliContribution implements CliContribution {
 
     protected _localDir: string | undefined;
     protected _maxSessionLogsFolders: number;
+    protected _keepUncompressedInPlace = false;
 
     configure(conf: Argv): void {
         conf.option(PluginCliContribution.PLUGINS, {
@@ -48,6 +50,12 @@ export class PluginCliContribution implements CliContribution {
             default: PluginCliContribution.DEFAULT_PLUGIN_MAX_SESSION_LOGS_FOLDERS,
             nargs: 1
         });
+
+        conf.option(PluginCliContribution.UNCOMPRESSED_PLUGINS_IN_PLACE, {
+            description: 'Whether user plugins that are stored on disk as uncompressed directories should be run in place or copied to temporary folder.',
+            type: 'boolean',
+            default: false,
+        });
     }
 
     setArguments(args: Arguments): void {
@@ -60,6 +68,7 @@ export class PluginCliContribution implements CliContribution {
         if (maxSessionLogsFoldersArg && Number.isInteger(maxSessionLogsFoldersArg) && maxSessionLogsFoldersArg > 0) {
             this._maxSessionLogsFolders = maxSessionLogsFoldersArg;
         }
+        this._keepUncompressedInPlace = Boolean(args[PluginCliContribution.UNCOMPRESSED_PLUGINS_IN_PLACE]);
     }
 
     localDir(): string | undefined {
@@ -70,4 +79,7 @@ export class PluginCliContribution implements CliContribution {
         return this._maxSessionLogsFolders;
     }
 
+    copyUncompressedPlugins(): boolean {
+        return !this._keepUncompressedInPlace;
+    }
 }

@@ -1,24 +1,23 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { Message } from '@theia/core/shared/@phosphor/messaging';
-import { Disposable, MaybeArray } from '@theia/core/lib/common';
-import { Key, LabelProvider } from '@theia/core/lib/browser';
-import { AbstractDialog, DialogProps, setEnabled, createIconButton, Widget } from '@theia/core/lib/browser';
+import { Disposable, MaybeArray, nls } from '@theia/core/lib/common';
+import { AbstractDialog, DialogProps, setEnabled, createIconButton, Widget, codiconArray, Key, LabelProvider } from '@theia/core/lib/browser';
 import { FileStatNode } from '../file-tree';
 import { LocationListRenderer, LocationListRendererFactory } from '../location';
 import { FileDialogModel } from './file-dialog-model';
@@ -26,6 +25,8 @@ import { FileDialogWidget } from './file-dialog-widget';
 import { FileDialogTreeFiltersRenderer, FileDialogTreeFilters, FileDialogTreeFiltersRendererFactory } from './file-dialog-tree-filters-renderer';
 import URI from '@theia/core/lib/common/uri';
 import { Panel } from '@theia/core/shared/@phosphor/widgets';
+import * as DOMPurify from '@theia/core/shared/dompurify';
+import { FileDialogHiddenFilesToggleRenderer, HiddenFilesToggleRendererFactory } from './file-dialog-hidden-files-renderer';
 
 export const OpenFileDialogFactory = Symbol('OpenFileDialogFactory');
 export interface OpenFileDialogFactory {
@@ -70,6 +71,12 @@ export class FileDialogProps extends DialogProps {
      * ```
      */
     filters?: FileDialogTreeFilters;
+
+    /**
+     * Determines if the dialog window should be modal.
+     * Defaults to `true`.
+     */
+    modal?: boolean;
 
 }
 
@@ -121,14 +128,16 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
     protected up: HTMLSpanElement;
     protected locationListRenderer: LocationListRenderer;
     protected treeFiltersRenderer: FileDialogTreeFiltersRenderer | undefined;
+    protected hiddenFilesToggleRenderer: FileDialogHiddenFilesToggleRenderer;
     protected treePanel: Panel;
 
     @inject(FileDialogWidget) readonly widget: FileDialogWidget;
     @inject(LocationListRendererFactory) readonly locationListFactory: LocationListRendererFactory;
     @inject(FileDialogTreeFiltersRendererFactory) readonly treeFiltersFactory: FileDialogTreeFiltersRendererFactory;
+    @inject(HiddenFilesToggleRendererFactory) readonly hiddenFilesToggleFactory: HiddenFilesToggleRendererFactory;
 
     constructor(
-        @inject(FileDialogProps) readonly props: FileDialogProps
+        @inject(FileDialogProps) override readonly props: FileDialogProps
     ) {
         super(props);
     }
@@ -146,18 +155,21 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
         navigationPanel.classList.add(NAVIGATION_PANEL_CLASS);
         this.contentNode.appendChild(navigationPanel);
 
-        navigationPanel.appendChild(this.back = createIconButton('fa', 'fa-chevron-left'));
+        navigationPanel.appendChild(this.back = createIconButton(...codiconArray('chevron-left', true)));
         this.back.classList.add(NAVIGATION_BACK_CLASS);
-        this.back.title = 'Navigate Back';
-        navigationPanel.appendChild(this.forward = createIconButton('fa', 'fa-chevron-right'));
+        this.back.title = nls.localize('theia/filesystem/dialog/navigateBack', 'Navigate Back');
+
+        navigationPanel.appendChild(this.forward = createIconButton(...codiconArray('chevron-right', true)));
         this.forward.classList.add(NAVIGATION_FORWARD_CLASS);
-        this.forward.title = 'Navigate Forward';
-        navigationPanel.appendChild(this.home = createIconButton('fa', 'fa-home'));
+        this.forward.title = nls.localize('theia/filesystem/dialog/navigateForward', 'Navigate Forward');
+
+        navigationPanel.appendChild(this.home = createIconButton(...codiconArray('home', true)));
         this.home.classList.add(NAVIGATION_HOME_CLASS);
-        this.home.title = 'Go To Initial Location';
-        navigationPanel.appendChild(this.up = createIconButton('fa', 'fa-level-up'));
+        this.home.title = nls.localize('theia/filesystem/dialog/initialLocation', 'Go To Initial Location');
+
+        navigationPanel.appendChild(this.up = createIconButton(...codiconArray('arrow-up', true)));
         this.up.classList.add(NAVIGATION_UP_CLASS);
-        this.up.title = 'Navigate Up One Directory';
+        this.up.title = nls.localize('theia/filesystem/dialog/navigateUp', 'Navigate Up One Directory');
 
         const locationListRendererHost = document.createElement('div');
         this.locationListRenderer = this.locationListFactory({ model: this.model, host: locationListRendererHost });
@@ -165,8 +177,15 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
         this.locationListRenderer.host.classList.add(NAVIGATION_LOCATION_LIST_PANEL_CLASS);
         navigationPanel.appendChild(this.locationListRenderer.host);
 
+        this.hiddenFilesToggleRenderer = this.hiddenFilesToggleFactory(this.widget.model.tree);
+        this.contentNode.appendChild(this.hiddenFilesToggleRenderer.host);
+
         if (this.props.filters) {
             this.treeFiltersRenderer = this.treeFiltersFactory({ suppliedFilters: this.props.filters, fileDialogTree: this.widget.model.tree });
+            const filters = Object.keys(this.props.filters);
+            if (filters.length) {
+                this.widget.model.tree.setFilter(this.props.filters[filters[0]]);
+            }
         }
     }
 
@@ -174,7 +193,7 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
         return this.widget.model;
     }
 
-    protected onUpdateRequest(msg: Message): void {
+    protected override onUpdateRequest(msg: Message): void {
         super.onUpdateRequest(msg);
         setEnabled(this.back, this.model.canNavigateBackward());
         setEnabled(this.forward, this.model.canNavigateForward());
@@ -191,14 +210,14 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
         this.widget.update();
     }
 
-    protected handleEnter(event: KeyboardEvent): boolean | void {
+    protected override handleEnter(event: KeyboardEvent): boolean | void {
         if (event.target instanceof HTMLTextAreaElement || this.targetIsDirectoryInput(event.target) || this.targetIsInputToggle(event.target)) {
             return false;
         }
         this.accept();
     }
 
-    protected handleEscape(event: KeyboardEvent): boolean | void {
+    protected override handleEscape(event: KeyboardEvent): boolean | void {
         if (event.target instanceof HTMLTextAreaElement || this.targetIsDirectoryInput(event.target)) {
             return false;
         }
@@ -220,7 +239,7 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
             this.contentNode.appendChild(filtersPanel);
 
             const titlePanel = document.createElement('div');
-            titlePanel.innerHTML = 'Format:';
+            titlePanel.innerHTML = DOMPurify.sanitize(nls.localize('theia/filesystem/format', 'Format:'));
             titlePanel.classList.add(FILTERS_LABEL_CLASS);
             filtersPanel.appendChild(titlePanel);
 
@@ -229,7 +248,7 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
         }
     }
 
-    protected onAfterAttach(msg: Message): void {
+    protected override onAfterAttach(msg: Message): void {
         Widget.attach(this.treePanel, this.contentNode);
         this.toDisposeOnDetach.push(Disposable.create(() => {
             Widget.detach(this.treePanel);
@@ -241,7 +260,7 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
 
         this.appendFiltersPanel();
 
-        this.appendCloseButton('Cancel');
+        this.appendCloseButton(nls.localizeByDefault('Cancel'));
         this.appendAcceptButton(this.getAcceptButtonLabel());
 
         this.addKeyListener(this.back, Key.ENTER, () => {
@@ -276,7 +295,7 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
 
     protected abstract getAcceptButtonLabel(): string;
 
-    protected onActivateRequest(msg: Message): void {
+    protected override onActivateRequest(msg: Message): void {
         this.widget.activate();
     }
 
@@ -285,12 +304,12 @@ export abstract class FileDialog<T> extends AbstractDialog<T> {
 @injectable()
 export class OpenFileDialog extends FileDialog<MaybeArray<FileStatNode>> {
 
-    constructor(@inject(OpenFileDialogProps) readonly props: OpenFileDialogProps) {
+    constructor(@inject(OpenFileDialogProps) override readonly props: OpenFileDialogProps) {
         super(props);
     }
 
     @postConstruct()
-    init(): void {
+    override init(): void {
         super.init();
         const { props } = this;
         if (props.canSelectFiles !== undefined) {
@@ -299,12 +318,12 @@ export class OpenFileDialog extends FileDialog<MaybeArray<FileStatNode>> {
     }
 
     protected getAcceptButtonLabel(): string {
-        return this.props.openLabel ? this.props.openLabel : 'Open';
+        return this.props.openLabel ? this.props.openLabel : nls.localizeByDefault('Open');
     }
 
-    protected isValid(value: MaybeArray<FileStatNode>): string {
+    protected override isValid(value: MaybeArray<FileStatNode>): string {
         if (value && !this.props.canSelectMany && value instanceof Array) {
-            return 'You can select only one item';
+            return nls.localize('theia/filesystem/dialog/multipleItemMessage', 'You can select only one item');
         }
         return '';
     }
@@ -317,7 +336,7 @@ export class OpenFileDialog extends FileDialog<MaybeArray<FileStatNode>> {
         }
     }
 
-    protected async accept(): Promise<void> {
+    protected override async accept(): Promise<void> {
         const selection = this.value;
         if (!this.props.canSelectFolders
             && !Array.isArray(selection)
@@ -337,22 +356,22 @@ export class SaveFileDialog extends FileDialog<URI | undefined> {
     @inject(LabelProvider)
     protected readonly labelProvider: LabelProvider;
 
-    constructor(@inject(SaveFileDialogProps) readonly props: SaveFileDialogProps) {
+    constructor(@inject(SaveFileDialogProps) override readonly props: SaveFileDialogProps) {
         super(props);
     }
 
     @postConstruct()
-    init(): void {
+    override init(): void {
         super.init();
         const { widget } = this;
         widget.addClass(SAVE_DIALOG_CLASS);
     }
 
     protected getAcceptButtonLabel(): string {
-        return this.props.saveLabel ? this.props.saveLabel : 'Save';
+        return this.props.saveLabel ? this.props.saveLabel : nls.localizeByDefault('Save');
     }
 
-    protected onUpdateRequest(msg: Message): void {
+    protected override onUpdateRequest(msg: Message): void {
         // Update file name field when changing a selection
         if (this.fileNameField) {
             if (this.widget.model.selectedFileStatNodes.length === 1) {
@@ -369,7 +388,7 @@ export class SaveFileDialog extends FileDialog<URI | undefined> {
         super.onUpdateRequest(msg);
     }
 
-    protected isValid(value: URI | undefined): string | boolean {
+    protected override isValid(value: URI | undefined): string | boolean {
         if (this.fileNameField && this.fileNameField.value) {
             return '';
         }
@@ -390,7 +409,7 @@ export class SaveFileDialog extends FileDialog<URI | undefined> {
         return undefined;
     }
 
-    protected onAfterAttach(msg: Message): void {
+    protected override onAfterAttach(msg: Message): void {
         super.onAfterAttach(msg);
 
         const fileNamePanel = document.createElement('div');
@@ -398,12 +417,13 @@ export class SaveFileDialog extends FileDialog<URI | undefined> {
         this.contentNode.appendChild(fileNamePanel);
 
         const titlePanel = document.createElement('div');
-        titlePanel.innerHTML = 'Name:';
+        titlePanel.innerHTML = DOMPurify.sanitize(nls.localize('theia/filesystem/dialog/name', 'Name:'));
         titlePanel.classList.add(FILENAME_LABEL_CLASS);
         fileNamePanel.appendChild(titlePanel);
 
         this.fileNameField = document.createElement('input');
         this.fileNameField.type = 'text';
+        this.fileNameField.spellcheck = false;
         this.fileNameField.classList.add('theia-input', FILENAME_TEXTFIELD_CLASS);
         this.fileNameField.value = this.props.inputValue || '';
         fileNamePanel.appendChild(this.fileNameField);

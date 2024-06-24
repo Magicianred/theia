@@ -1,35 +1,38 @@
-/********************************************************************************
- * Copyright (C) 2020 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject } from '@theia/core/shared/inversify';
-import { MonacoQuickOpenService } from './monaco-quick-open-service';
-import { QuickOpenModel, QuickOpenItem, QuickOpenMode } from '@theia/core/lib/common/quick-open-model';
-import { Deferred } from '@theia/core/lib/common/promise-util';
 import { PreferenceService, FrontendApplicationContribution, PreferenceLanguageOverrideService } from '@theia/core/lib/browser';
 import { EditorManager } from '@theia/editor/lib/browser';
+import { MonacoQuickInputService } from './monaco-quick-input-service';
+import * as monaco from '@theia/monaco-editor-core';
+import { FormattingConflicts, FormattingMode } from '@theia/monaco-editor-core/esm/vs/editor/contrib/format/browser/format';
+import { DocumentFormattingEditProvider, DocumentRangeFormattingEditProvider } from '@theia/monaco-editor-core/esm/vs/editor/common/languages';
+import { ITextModel } from '@theia/monaco-editor-core/esm/vs/editor/common/model';
+import { nls } from '@theia/core/lib/common/nls';
 
-type FormattingEditProvider = monaco.languages.DocumentFormattingEditProvider | monaco.languages.DocumentRangeFormattingEditProvider;
+type FormattingEditProvider = DocumentFormattingEditProvider | DocumentRangeFormattingEditProvider;
 
 const PREFERENCE_NAME = 'editor.defaultFormatter';
 
 @injectable()
 export class MonacoFormattingConflictsContribution implements FrontendApplicationContribution {
 
-    @inject(MonacoQuickOpenService)
-    protected readonly quickOpenService: MonacoQuickOpenService;
+    @inject(MonacoQuickInputService)
+    protected readonly monacoQuickInputService: MonacoQuickInputService;
 
     @inject(PreferenceService)
     protected readonly preferenceService: PreferenceService;
@@ -41,12 +44,13 @@ export class MonacoFormattingConflictsContribution implements FrontendApplicatio
     protected readonly editorManager: EditorManager;
 
     async initialize(): Promise<void> {
-        monaco.format.FormattingConflicts.setFormatterSelector(<T extends FormattingEditProvider>(
-            formatters: T[], document: monaco.editor.ITextModel, mode: monaco.format.FormattingMode) =>
+
+        FormattingConflicts.setFormatterSelector(<T extends FormattingEditProvider>(
+            formatters: T[], document: ITextModel, mode: FormattingMode) =>
             this.selectFormatter(formatters, document, mode));
     }
 
-    private async setDefaultFormatter(language: string, formatter: string): Promise<void> {
+    protected async setDefaultFormatter(language: string, formatter: string): Promise<void> {
         const name = this.preferenceSchema.overridePreferenceName({
             preferenceName: PREFERENCE_NAME,
             overrideIdentifier: language
@@ -55,17 +59,17 @@ export class MonacoFormattingConflictsContribution implements FrontendApplicatio
         await this.preferenceService.set(name, formatter);
     }
 
-    private getDefaultFormatter(language: string): string | undefined {
+    private getDefaultFormatter(language: string, resourceURI: string): string | undefined {
         const name = this.preferenceSchema.overridePreferenceName({
             preferenceName: PREFERENCE_NAME,
             overrideIdentifier: language
         });
 
-        return this.preferenceService.get<string>(name);
+        return this.preferenceService.get<string>(name, undefined, resourceURI);
     }
 
     private async selectFormatter<T extends FormattingEditProvider>(
-        formatters: T[], document: monaco.editor.ITextModel, mode: monaco.format.FormattingMode): Promise<T | undefined> {
+        formatters: T[], document: monaco.editor.ITextModel | ITextModel, mode: FormattingMode): Promise<T | undefined> {
 
         if (formatters.length === 0) {
             return undefined;
@@ -81,7 +85,7 @@ export class MonacoFormattingConflictsContribution implements FrontendApplicatio
         }
 
         const languageId = currentEditor.editor.document.languageId;
-        const defaultFormatterId = await this.getDefaultFormatter(languageId);
+        const defaultFormatterId = this.getDefaultFormatter(languageId, document.uri.toString());
 
         if (defaultFormatterId) {
             const formatter = formatters.find(f => f.extensionId && f.extensionId.value === defaultFormatterId);
@@ -90,59 +94,23 @@ export class MonacoFormattingConflictsContribution implements FrontendApplicatio
             }
         }
 
-        let deferred: Deferred<T> | undefined = new Deferred<T>();
+        return new Promise<T | undefined>(async (resolve, reject) => {
+            const items = formatters
+                .filter(formatter => formatter.displayName)
+                .map(formatter => ({
+                    label: formatter.displayName!,
+                    detail: formatter.extensionId ? formatter.extensionId.value : undefined,
+                    value: formatter,
+                }))
+                .sort((a, b) => a.label!.localeCompare(b.label!));
 
-        const items: QuickOpenItem[] = formatters
-            .filter(formatter => formatter.displayName)
-            .map<QuickOpenItem>(formatter => {
-                const displayName: string = formatter.displayName!;
-                const extensionId = formatter.extensionId ? formatter.extensionId.value : undefined;
-
-                return new QuickOpenItem({
-                    label: displayName,
-                    detail: extensionId,
-                    run: (openMode: QuickOpenMode) => {
-                        if (openMode === QuickOpenMode.OPEN) {
-                            if (deferred) {
-                                deferred.resolve(formatter);
-                                deferred = undefined;
-                            }
-
-                            this.quickOpenService.hide();
-
-                            this.setDefaultFormatter(languageId, extensionId ? extensionId : '');
-                            return true;
-                        }
-
-                        return false;
-                    }
-                });
-            })
-            .sort((a, b) => a.getLabel()!.localeCompare(b.getLabel()!));
-
-        const model: QuickOpenModel = {
-            onType(lookFor: string, acceptor: (items: QuickOpenItem[]) => void): void {
-                acceptor(items);
+            const selectedFormatter = await this.monacoQuickInputService.showQuickPick(items, { placeholder: nls.localizeByDefault('Format Document With...') });
+            if (selectedFormatter) {
+                this.setDefaultFormatter(languageId, selectedFormatter.detail ? selectedFormatter.detail : '');
+                resolve(selectedFormatter.value);
+            } else {
+                resolve(undefined);
             }
-        };
-
-        this.quickOpenService.open(model,
-            {
-                fuzzyMatchDescription: true,
-                fuzzyMatchLabel: true,
-                fuzzyMatchDetail: true,
-                placeholder: 'Select formatter for the current document',
-                ignoreFocusOut: false,
-
-                onClose: () => {
-                    if (deferred) {
-                        deferred.resolve(undefined);
-                        deferred = undefined;
-                    }
-                }
-            });
-
-        return deferred.promise;
+        });
     }
-
 }

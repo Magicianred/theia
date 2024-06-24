@@ -1,20 +1,21 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { interfaces } from '@theia/core/shared/inversify';
+import * as monaco from '@theia/monaco-editor-core';
 import { RPCProtocol } from '../../common/rpc-protocol';
 import {
     MAIN_RPC_CONTEXT,
@@ -29,9 +30,10 @@ import { EditorModelService } from './text-editor-model-service';
 import { MonacoEditorModel } from '@theia/monaco/lib/browser/monaco-editor-model';
 import { MonacoEditor } from '@theia/monaco/lib/browser/monaco-editor';
 import { TextEditorMain } from './text-editor-main';
-import { Emitter } from '@theia/core';
-import { DisposableCollection } from '@theia/core';
+import { DisposableCollection, Emitter, URI } from '@theia/core';
 import { EditorManager, EditorWidget } from '@theia/editor/lib/browser';
+import { SaveableService } from '@theia/core/lib/browser/saveable-service';
+import { TabsMainImpl } from './tabs/tabs-main';
 
 export class EditorsAndDocumentsMain implements Disposable {
 
@@ -41,6 +43,8 @@ export class EditorsAndDocumentsMain implements Disposable {
     private readonly textEditors = new Map<string, TextEditorMain>();
 
     private readonly modelService: EditorModelService;
+    private readonly editorManager: EditorManager;
+    private readonly saveResourceService: SaveableService;
 
     private readonly onTextEditorAddEmitter = new Emitter<TextEditorMain[]>();
     private readonly onTextEditorRemoveEmitter = new Emitter<string[]>();
@@ -56,13 +60,14 @@ export class EditorsAndDocumentsMain implements Disposable {
         Disposable.create(() => this.textEditors.clear())
     );
 
-    constructor(rpc: RPCProtocol, container: interfaces.Container) {
+    constructor(rpc: RPCProtocol, container: interfaces.Container, tabsMain: TabsMainImpl) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.EDITORS_AND_DOCUMENTS_EXT);
 
-        const editorService = container.get(EditorManager);
+        this.editorManager = container.get(EditorManager);
         this.modelService = container.get(EditorModelService);
+        this.saveResourceService = container.get(SaveableService);
 
-        this.stateComputer = new EditorAndDocumentStateComputer(d => this.onDelta(d), editorService, this.modelService);
+        this.stateComputer = new EditorAndDocumentStateComputer(d => this.onDelta(d), this.editorManager, this.modelService, tabsMain);
         this.toDispose.push(this.stateComputer);
         this.toDispose.push(this.onTextEditorAddEmitter);
         this.toDispose.push(this.onTextEditorRemoveEmitter);
@@ -138,6 +143,7 @@ export class EditorsAndDocumentsMain implements Disposable {
             uri: model.textEditorModel.uri,
             versionId: model.textEditorModel.getVersionId(),
             lines: model.textEditorModel.getLinesContent(),
+            languageId: model.getLanguageId(),
             EOL: model.textEditorModel.getEOL(),
             modeId: model.languageId,
             isDirty: model.dirty
@@ -165,8 +171,40 @@ export class EditorsAndDocumentsMain implements Disposable {
         return this.textEditors.get(id);
     }
 
+    async save(uri: URI): Promise<URI | undefined> {
+        const editor = await this.editorManager.getByUri(uri);
+        if (!editor) {
+            return undefined;
+        }
+        return this.saveResourceService.save(editor);
+    }
+
+    async saveAs(uri: URI): Promise<URI | undefined> {
+        const editor = await this.editorManager.getByUri(uri);
+        if (!editor) {
+            return undefined;
+        }
+        if (!this.saveResourceService.canSaveAs(editor)) {
+            return undefined;
+        }
+        return this.saveResourceService.saveAs(editor);
+    }
+
     saveAll(includeUntitled?: boolean): Promise<boolean> {
         return this.modelService.saveAll(includeUntitled);
+    }
+
+    hideEditor(id: string): Promise<void> {
+        for (const editorWidget of this.editorManager.all) {
+            const monacoEditor = MonacoEditor.get(editorWidget);
+            if (monacoEditor) {
+                if (id === new EditorSnapshot(monacoEditor).id) {
+                    editorWidget.close();
+                    break;
+                }
+            }
+        }
+        return Promise.resolve();
     }
 }
 
@@ -180,18 +218,25 @@ class EditorAndDocumentStateComputer implements Disposable {
     constructor(
         private callback: (delta: EditorAndDocumentStateDelta) => void,
         private readonly editorService: EditorManager,
-        private readonly modelService: EditorModelService
+        private readonly modelService: EditorModelService,
+        private readonly tabsMain: TabsMainImpl
     ) { }
 
     listen(): void {
         if (this.toDispose.disposed) {
             return;
         }
-        this.toDispose.push(this.editorService.onCreated(widget => {
+        this.toDispose.push(this.editorService.onCreated(async widget => {
+            await this.tabsMain.waitForWidget(widget);
             this.onTextEditorAdd(widget);
             this.update();
         }));
-        this.toDispose.push(this.editorService.onCurrentEditorChanged(() => this.update()));
+        this.toDispose.push(this.editorService.onCurrentEditorChanged(async widget => {
+            if (widget) {
+                await this.tabsMain.waitForWidget(widget);
+            }
+            this.update();
+        }));
         this.toDispose.push(this.modelService.onModelAdded(this.onModelAdded, this));
         this.toDispose.push(this.modelService.onModelRemoved(() => this.update()));
 

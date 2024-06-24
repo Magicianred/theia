@@ -1,21 +1,20 @@
-/********************************************************************************
- * Copyright (C) 2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-/* eslint-disable no-unused-expressions */
 
 import { enableJSDOM } from '../test/jsdom';
 
@@ -30,8 +29,9 @@ import { PreferenceSchemaProvider, PreferenceSchema } from './preference-contrib
 import { PreferenceScope } from './preference-scope';
 import { PreferenceProvider } from './preference-provider';
 import { FrontendApplicationConfigProvider } from '../frontend-application-config-provider';
-import { createPreferenceProxy, PreferenceProxyOptions, PreferenceProxy, PreferenceChangeEvent } from './preference-proxy';
-import { ApplicationProps } from '@theia/application-package/lib/application-props';
+import { PreferenceProxyOptions, PreferenceProxy, PreferenceChangeEvent, createPreferenceProxy } from './preference-proxy';
+import { PreferenceProxyFactory } from './injectable-preference-proxy';
+import { waitForEvent } from '../../common/promise-util';
 
 disableJSDOM();
 
@@ -40,7 +40,7 @@ process.on('unhandledRejection', (reason, promise) => {
     throw reason;
 });
 
-const { expect } = require('chai');
+import { expect } from 'chai';
 let testContainer: Container;
 
 function createTestContainer(): Container {
@@ -56,10 +56,7 @@ describe('Preference Proxy', () => {
 
     before(() => {
         disableJSDOM = enableJSDOM();
-        FrontendApplicationConfigProvider.set({
-            ...ApplicationProps.DEFAULT.frontend.config,
-            'applicationName': 'test'
-        });
+        FrontendApplicationConfigProvider.set({});
     });
 
     after(() => {
@@ -84,14 +81,16 @@ describe('Preference Proxy', () => {
     });
 
     // Actually run the test suite with different parameters:
-    testPreferenceProxy('Synchronous Schema Definition', { asyncSchema: false });
-    testPreferenceProxy('Asynchronous Schema Definition (1s delay)', { asyncSchema: true });
+    testPreferenceProxy('Synchronous Schema Definition + createPreferenceProxy', { asyncSchema: false });
+    testPreferenceProxy('Asynchronous Schema Definition (1s delay) + createPreferenceProxy', { asyncSchema: true });
+    testPreferenceProxy('Synchronous Schema Definition + Injectable Preference Proxy', { asyncSchema: false, useFactory: true });
+    testPreferenceProxy('Asynchronous Schema Definition (1s delay) + Injectable Preference Proxy', { asyncSchema: true, useFactory: true });
 
     function getProvider(scope: PreferenceScope): MockPreferenceProvider {
         return testContainer.getNamed(PreferenceProvider, scope) as MockPreferenceProvider;
     }
 
-    function testPreferenceProxy(testDescription: string, testOptions: { asyncSchema: boolean }): void {
+    function testPreferenceProxy(testDescription: string, testOptions: { asyncSchema: boolean, useFactory?: boolean }): void {
 
         describe(testDescription, () => {
 
@@ -113,11 +112,15 @@ describe('Preference Proxy', () => {
                         prefSchema.setSchema(s);
                         resolve(s);
                     }, 1000));
-                    const proxy = createPreferenceProxy(prefService, promisedSchema, options);
+                    const proxy = testOptions.useFactory
+                        ? testContainer.get<PreferenceProxyFactory>(PreferenceProxyFactory)(promisedSchema, options)
+                        : createPreferenceProxy(prefService, promisedSchema, options);
                     return { proxy, promisedSchema };
                 } else {
                     prefSchema.setSchema(s);
-                    const proxy = createPreferenceProxy(prefService, s, options);
+                    const proxy = testOptions.useFactory
+                        ? testContainer.get<PreferenceProxyFactory>(PreferenceProxyFactory)(s, options)
+                        : createPreferenceProxy(prefService, s, options);
                     return { proxy };
                 }
             }
@@ -147,7 +150,7 @@ describe('Preference Proxy', () => {
                 });
             }
 
-            it('by default, it should get provide access in flat style but not deep', async () => {
+            it('by default, it should provide access in flat style but not deep', async () => {
                 const { proxy, promisedSchema } = getProxy();
                 if (promisedSchema) {
                     await promisedSchema;
@@ -157,17 +160,17 @@ describe('Preference Proxy', () => {
                 expect(Object.keys(proxy).join()).to.equal(['my.pref'].join());
             });
 
-            it('it should get provide access in deep style but not flat', async () => {
+            it('it should provide access in deep style but not flat', async () => {
                 const { proxy, promisedSchema } = getProxy(undefined, { style: 'deep' });
                 if (promisedSchema) {
                     await promisedSchema;
                 }
                 expect(proxy['my.pref']).to.equal(undefined);
                 expect(proxy.my.pref).to.equal('foo');
-                expect(Object.keys(proxy).join()).to.equal(['my'].join());
+                expect(Object.keys(proxy).join()).equal('my');
             });
 
-            it('it should get provide access in to both styles', async () => {
+            it('it should provide access in to both styles', async () => {
                 const { proxy, promisedSchema } = getProxy(undefined, { style: 'both' });
                 if (promisedSchema) {
                     await promisedSchema;
@@ -201,6 +204,66 @@ describe('Preference Proxy', () => {
                 expect(theSecondChange!.newValue).to.equal('bar');
                 expect(theSecondChange!.oldValue).to.equal(undefined);
                 expect(theSecondChange!.preferenceName).to.equal('my.pref');
+            });
+
+            it("should not forward changes that don't match the proxy's language override", async () => {
+                const { proxy, promisedSchema } = getProxy({
+                    properties: {
+                        'my.pref': {
+                            type: 'string',
+                            defaultValue: 'foo',
+                            overridable: true,
+                        }
+                    }
+                }, { style: 'both', overrideIdentifier: 'typescript' });
+                await promisedSchema;
+                let changeEventsEmittedByProxy = 0;
+                let changeEventsEmittedByService = 0;
+                prefSchema.registerOverrideIdentifier('swift');
+                prefSchema.registerOverrideIdentifier('typescript');
+                // The service will emit events related to updating the overrides - those are irrelevant
+                await waitForEvent(prefService.onPreferencesChanged, 500);
+                prefService.onPreferencesChanged(() => changeEventsEmittedByService++);
+                proxy.onPreferenceChanged(() => changeEventsEmittedByProxy++);
+                await prefService.set(prefService.overridePreferenceName({ overrideIdentifier: 'swift', preferenceName: 'my.pref' }), 'boo', PreferenceScope.User);
+                expect(changeEventsEmittedByService, 'The service should have emitted an event for the non-matching override.').to.equal(1);
+                expect(changeEventsEmittedByProxy, 'The proxy should not have emitted an event for the non-matching override.').to.equal(0);
+                await prefService.set('my.pref', 'far', PreferenceScope.User);
+                expect(changeEventsEmittedByService, 'The service should have emitted an event for the base name.').to.equal(2);
+                expect(changeEventsEmittedByProxy, 'The proxy should have emitted for an event for the base name.').to.equal(1);
+                await prefService.set(prefService.overridePreferenceName({ preferenceName: 'my.pref', overrideIdentifier: 'typescript' }), 'faz', PreferenceScope.User);
+                expect(changeEventsEmittedByService, 'The service should have emitted an event for the matching override.').to.equal(3);
+                expect(changeEventsEmittedByProxy, 'The proxy should have emitted an event for the matching override.').to.equal(2);
+                await prefService.set('my.pref', 'yet another value', PreferenceScope.User);
+                expect(changeEventsEmittedByService, 'The service should have emitted another event for the base name.').to.equal(4);
+                expect(changeEventsEmittedByProxy, 'The proxy should not have emitted an event, because the value for TS has been overridden.').to.equal(2);
+            });
+
+            it('`affects` should only return `true` if the language overrides match', async () => {
+                const { proxy, promisedSchema } = getProxy({
+                    properties: {
+                        'my.pref': {
+                            type: 'string',
+                            defaultValue: 'foo',
+                            overridable: true,
+                        }
+                    }
+                }, { style: 'both' });
+                await promisedSchema;
+                prefSchema.registerOverrideIdentifier('swift');
+                prefSchema.registerOverrideIdentifier('typescript');
+                let changesNotAffectingTypescript = 0;
+                let changesAffectingTypescript = 0;
+                proxy.onPreferenceChanged(change => {
+                    if (change.affects(undefined, 'typescript')) {
+                        changesAffectingTypescript++;
+                    } else {
+                        changesNotAffectingTypescript++;
+                    }
+                });
+                await prefService.set('my.pref', 'bog', PreferenceScope.User);
+                expect(changesNotAffectingTypescript, 'Two events (one for `my.pref` and one for `[swift].my.pref`) should not have affected TS').to.equal(2);
+                expect(changesAffectingTypescript, 'One event should have been fired that does affect typescript.').to.equal(1);
             });
 
             it('toJSON with deep', async () => {

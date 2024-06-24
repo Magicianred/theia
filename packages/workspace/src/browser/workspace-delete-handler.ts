@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
@@ -23,6 +23,7 @@ import { WorkspaceUtils } from './workspace-utils';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { FileSystemPreferences } from '@theia/filesystem/lib/browser/filesystem-preferences';
 import { FileDeleteOptions, FileSystemProviderCapabilities } from '@theia/filesystem/lib/common/files';
+import { nls } from '@theia/core/lib/common/nls';
 
 @injectable()
 export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
@@ -84,11 +85,11 @@ export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
      * @param uris URIs of selected resources.
      */
     protected confirm(uris: URI[], options: FileDeleteOptions): Promise<boolean | undefined> {
-        let title = `File${uris.length === 1 ? '' : 's'}`;
+        let title = uris.length === 1 ? nls.localizeByDefault('File') : nls.localizeByDefault('Files');
         if (options.useTrash) {
-            title = 'Move ' + title + ' to Trash';
+            title = nls.localize('theia/workspace/trashTitle', 'Move {0} to Trash', title);
         } else {
-            title = 'Delete ' + title;
+            title = nls.localizeByDefault('Delete {0}', title);
         }
         return new ConfirmDialog({
             title,
@@ -105,18 +106,18 @@ export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
         const dirty = this.getDirty(uris);
         if (dirty.length) {
             if (dirty.length === 1) {
-                return `Do you really want to delete ${dirty[0].path.base} with unsaved changes?`;
+                return nls.localize('theia/workspace/confirmMessage.dirtySingle', 'Do you really want to delete {0} with unsaved changes?', dirty[0].path.base);
             }
-            return `Do you really want to delete ${dirty.length} files with unsaved changes?`;
+            return nls.localize('theia/workspace/confirmMessage.dirtyMultiple', 'Do you really want to delete {0} files with unsaved changes?', dirty.length);
         }
         if (uris.length === 1) {
-            return `Do you really want to delete ${uris[0].path.base}?`;
+            return nls.localize('theia/workspace/confirmMessage.uriSingle', 'Do you really want to delete {0}?', uris[0].path.base);
         }
         if (uris.length > 10) {
-            return `Do you really want to delete all the ${uris.length} selected files?`;
+            return nls.localize('theia/workspace/confirmMessage.uriMultiple', 'Do you really want to delete all the {0} selected files?', uris.length);
         }
         const messageContainer = document.createElement('div');
-        messageContainer.textContent = 'Do you really want to delete the following files?';
+        messageContainer.textContent = nls.localize('theia/workspace/confirmMessage.delete', 'Do you really want to delete the following files?');
         const list = document.createElement('ul');
         list.style.listStyleType = 'none';
         for (const uri of uris) {
@@ -147,16 +148,56 @@ export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
      * Perform deletion of a given URI.
      *
      * @param uri URI of selected resource.
+     * @param options deletion options.
      */
     protected async delete(uri: URI, options: FileDeleteOptions): Promise<void> {
         try {
             await Promise.all([
                 this.closeWithoutSaving(uri),
-                this.fileService.delete(uri, options)
+                options.useTrash ? this.moveFileToTrash(uri, options) : this.deleteFilePermanently(uri, options)
             ]);
         } catch (e) {
             console.error(e);
         }
+    }
+
+    protected async deleteFilePermanently(uri: URI, options: FileDeleteOptions): Promise<void> {
+        this.fileService.delete(uri, { ...options, useTrash: false });
+    }
+
+    protected async moveFileToTrash(uri: URI, options: FileDeleteOptions): Promise<void> {
+        try {
+            await this.fileService.delete(uri, { ...options, useTrash: true });
+        } catch (error) {
+            console.error('Error deleting with trash:', error);
+            if (await this.confirmDeletePermanently(uri)) {
+                return this.deleteFilePermanently(uri, options);
+            }
+        }
+    }
+
+    /**
+     * Display dialog to confirm the permanent deletion of a file.
+     *
+     * @param uri URI of selected resource.
+     */
+    protected async confirmDeletePermanently(uri: URI): Promise<boolean> {
+        const title = nls.localize('theia/workspace/confirmDeletePermanently.title', 'Error deleting file');
+
+        const msg = document.createElement('div');
+
+        const question = document.createElement('p');
+        question.textContent = nls.localize('theia/workspace/confirmDeletePermanently.description',
+            'Failed to delete "{0}" using the Trash. Do you want to permanently delete instead?',
+            uri.path.base);
+        msg.append(question);
+
+        const info = document.createElement('p');
+        info.textContent = nls.localize('theia/workspace/confirmDeletePermanently.solution', 'You can disable the use of Trash in the preferences.');
+        msg.append(info);
+
+        const response = await new ConfirmDialog({ title, msg }).open();
+        return response || false;
     }
 
     /**
@@ -165,12 +206,7 @@ export class WorkspaceDeleteHandler implements UriCommandHandler<URI[]> {
      * @param uri URI of a selected resource.
      */
     protected async closeWithoutSaving(uri: URI): Promise<void> {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const pending: Promise<any>[] = [];
-        for (const [, widget] of NavigatableWidget.getAffected(this.shell.widgets, uri)) {
-            pending.push(this.shell.closeWidget(widget.id, { save: false }));
-        }
-        await Promise.all(pending);
+        const toClose = [...NavigatableWidget.getAffected(this.shell.widgets, uri)].map(([, widget]) => widget);
+        await this.shell.closeMany(toClose, { save: false });
     }
-
 }

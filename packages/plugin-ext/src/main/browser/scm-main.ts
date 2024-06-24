@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2019-2021 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019-2021 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
@@ -40,6 +40,9 @@ import { URI as vscodeURI } from '@theia/core/shared/vscode-uri';
 import { Splice } from '../../common/arrays';
 import { UriComponents } from '../../common/uri-components';
 import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
+import { PluginSharedStyle } from './plugin-shared-style';
+import { IconUrl } from '../../common';
+import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/base/common/themables';
 
 export class PluginScmResourceGroup implements ScmResourceGroup {
 
@@ -147,10 +150,12 @@ export class PluginScmProvider implements ScmProvider {
     constructor(
         private readonly proxy: ScmExt,
         private readonly colors: ColorRegistry,
+        private readonly sharedStyle: PluginSharedStyle,
         private readonly _handle: number,
         private readonly _contextValue: string,
         private readonly _label: string,
-        private readonly _rootUri: vscodeURI | undefined
+        private readonly _rootUri: vscodeURI | undefined,
+        private disposables: DisposableCollection
     ) { }
 
     updateSourceControl(features: SourceControlProviderFeatures): void {
@@ -222,13 +227,13 @@ export class PluginScmProvider implements ScmProvider {
                 const { start, deleteCount, rawResources } = groupSlice;
                 const resources = rawResources.map(rawResource => {
                     const { handle, sourceUri, icons, tooltip, strikeThrough, faded, contextValue, command } = rawResource;
-                    const icon = icons[0];
-                    const iconDark = icons[1] || icon;
+                    const icon = this.toIconClass(icons[0]);
+                    const iconDark = this.toIconClass(icons[1]) || icon;
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const colorVariable = (rawResource as any).colorId && this.colors.toCssVariableName((rawResource as any).colorId);
                     const decorations = {
-                        icon: icon ? vscodeURI.revive(icon) : undefined,
-                        iconDark: iconDark ? vscodeURI.revive(iconDark) : undefined,
+                        icon,
+                        iconDark,
                         tooltip,
                         strikeThrough,
                         // TODO remove the letter and colorId fields when the FileDecorationProvider is applied, see https://github.com/eclipse-theia/theia/pull/8911
@@ -258,6 +263,18 @@ export class PluginScmProvider implements ScmProvider {
         this.onDidChangeResourcesEmitter.fire();
     }
 
+    private toIconClass(icon: IconUrl | ThemeIcon | undefined): string | undefined {
+        if (!icon) {
+            return undefined;
+        }
+        if (ThemeIcon.isThemeIcon(icon)) {
+            return ThemeIcon.asClassName(icon);
+        }
+        const reference = this.sharedStyle.toIconClass(icon);
+        this.disposables.push(reference);
+        return reference.object.iconClass;
+    }
+
     unregisterGroup(handle: number): void {
         const group = this.groupsByHandle[handle];
 
@@ -280,11 +297,13 @@ export class ScmMainImpl implements ScmMain {
     private repositoryDisposables = new Map<number, DisposableCollection>();
     private readonly disposables = new DisposableCollection();
     private readonly colors: ColorRegistry;
+    private readonly sharedStyle: PluginSharedStyle;
 
     constructor(rpc: RPCProtocol, container: interfaces.Container) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.SCM_EXT);
         this.scmService = container.get(ScmService);
         this.colors = container.get(ColorRegistry);
+        this.sharedStyle = container.get(PluginSharedStyle);
     }
 
     dispose(): void {
@@ -298,7 +317,7 @@ export class ScmMainImpl implements ScmMain {
     }
 
     async $registerSourceControl(handle: number, id: string, label: string, rootUri: UriComponents | undefined): Promise<void> {
-        const provider = new PluginScmProvider(this.proxy, this.colors, handle, id, label, rootUri ? vscodeURI.revive(rootUri) : undefined);
+        const provider = new PluginScmProvider(this.proxy, this.colors, this.sharedStyle, handle, id, label, rootUri ? vscodeURI.revive(rootUri) : undefined, this.disposables);
         const repository = this.scmService.registerScmProvider(provider, {
             input: {
                 validator: async value => {
@@ -429,5 +448,25 @@ export class ScmMainImpl implements ScmMain {
         }
 
         repository.input.placeholder = placeholder;
+    }
+
+    $setInputBoxVisible(sourceControlHandle: number, visible: boolean): void {
+        const repository = this.repositories.get(sourceControlHandle);
+
+        if (!repository) {
+            return;
+        }
+
+        repository.input.visible = visible;
+    }
+
+    $setInputBoxEnabled(sourceControlHandle: number, enabled: boolean): void {
+        const repository = this.repositories.get(sourceControlHandle);
+
+        if (!repository) {
+            return;
+        }
+
+        repository.input.enabled = enabled;
     }
 }

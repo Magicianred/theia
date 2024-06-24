@@ -1,25 +1,26 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, named } from 'inversify';
 import { ContributionProvider } from '../common/contribution-provider';
-import { FrontendApplicationContribution } from './frontend-application';
+import { FrontendApplicationContribution } from './frontend-application-contribution';
 import { MaybePromise } from '../common';
 import { Endpoint } from './endpoint';
 import { timeout, Deferred } from '../common/promise-util';
+import { RequestContext, RequestService } from '@theia/request';
 
 export interface JsonSchemaConfiguration {
     fileMatch: string | string[];
@@ -95,10 +96,14 @@ export class JsonSchemaStore implements FrontendApplicationContribution {
 @injectable()
 export class DefaultJsonSchemaContribution implements JsonSchemaContribution {
 
+    @inject(RequestService)
+    protected readonly requestService: RequestService;
+
+    protected readonly jsonSchemaUrl = `${new Endpoint().httpScheme}//schemastore.org/api/json/catalog.json`;
+
     async registerSchemas(context: JsonSchemaRegisterContext): Promise<void> {
-        const url = `${new Endpoint().httpScheme}//schemastore.azurewebsites.net/api/json/catalog.json`;
-        const response = await fetch(url);
-        const schemas: DefaultJsonSchemaContribution.SchemaData[] = (await response.json()).schemas!;
+        const response = await this.requestService.request({ url: this.jsonSchemaUrl });
+        const schemas = RequestContext.asJson<{ schemas: DefaultJsonSchemaContribution.SchemaData[] }>(response).schemas;
         for (const s of schemas) {
             if (s.fileMatch) {
                 context.registerSchema({
@@ -120,4 +125,3 @@ export namespace DefaultJsonSchemaContribution {
         schema: any;
     }
 }
-

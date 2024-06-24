@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { EditorManager, EditorWidget, TextEditor, TextEditorDocument, TextDocumentChangeEvent } from '@theia/editor/lib/browser';
@@ -54,7 +54,11 @@ export class DirtyDiffManager {
     protected readonly preferences: GitPreferences;
 
     @postConstruct()
-    protected async initialize(): Promise<void> {
+    protected init(): void {
+        this.doInit();
+    }
+
+    protected async doInit(): Promise<void> {
         this.editorManager.onCreated(async e => this.handleEditorCreated(e));
         this.repositoryTracker.onGitEvent(throttle(async (event: GitStatusChangeEvent | undefined) =>
             this.handleGitStatusUpdate(event && event.source, event && event.status), 500));
@@ -67,13 +71,13 @@ export class DirtyDiffManager {
 
     protected async handleEditorCreated(editorWidget: EditorWidget): Promise<void> {
         const editor = editorWidget.editor;
-        const uri = editor.uri.toString();
-        if (editor.uri.scheme !== 'file') {
+        if (!this.supportsDirtyDiff(editor)) {
             return;
         }
         const toDispose = new DisposableCollection();
         const model = this.createNewModel(editor);
         toDispose.push(model);
+        const uri = editor.uri.toString();
         this.models.set(uri, model);
         toDispose.push(editor.onDocumentContentChanged(throttle((event: TextDocumentChangeEvent) => model.handleDocumentChanged(event.document), 1000)));
         editorWidget.disposed.connect(() => {
@@ -89,6 +93,10 @@ export class DirtyDiffManager {
         model.handleDocumentChanged(editor.document);
     }
 
+    protected supportsDirtyDiff(editor: TextEditor): boolean {
+        return editor.uri.scheme === 'file' && editor.shouldDisplayDirtyDiff();
+    }
+
     protected createNewModel(editor: TextEditor): DirtyDiffModel {
         const previousRevision = this.createPreviousFileRevision(editor.uri);
         const model = new DirtyDiffModel(editor, this.preferences, previousRevision);
@@ -97,11 +105,14 @@ export class DirtyDiffManager {
     }
 
     protected createPreviousFileRevision(fileUri: URI): DirtyDiffModel.PreviousFileRevision {
+        const getOriginalUri = (staged: boolean): URI => {
+            const query = staged ? '' : 'HEAD';
+            return fileUri.withScheme(GIT_RESOURCE_SCHEME).withQuery(query);
+        };
         return <DirtyDiffModel.PreviousFileRevision>{
             fileUri,
             getContents: async (staged: boolean) => {
-                const query = staged ? '' : 'HEAD';
-                const uri = fileUri.withScheme(GIT_RESOURCE_SCHEME).withQuery(query);
+                const uri = getOriginalUri(staged);
                 const gitResource = await this.gitResourceResolver.getResource(uri);
                 return gitResource.readContents();
             },
@@ -111,7 +122,8 @@ export class DirtyDiffManager {
                     return this.git.lsFiles(repository, fileUri.toString(), { errorUnmatch: true });
                 }
                 return false;
-            }
+            },
+            getOriginalUri
         };
     }
 
@@ -124,7 +136,6 @@ export class DirtyDiffManager {
             await model.handleGitStatusUpdate(repository, changes);
         }
     }
-
 }
 
 export class DirtyDiffModel implements Disposable {
@@ -133,7 +144,7 @@ export class DirtyDiffModel implements Disposable {
 
     protected enabled = true;
     protected staged: boolean;
-    protected previousContent: ContentLines | undefined;
+    protected previousContent: DirtyDiffModel.PreviousRevisionContent | undefined;
     protected currentContent: ContentLines | undefined;
 
     protected readonly onDirtyDiffUpdateEmitter = new Emitter<DirtyDiffUpdate>();
@@ -177,7 +188,7 @@ export class DirtyDiffModel implements Disposable {
     update(): void {
         const editor = this.editor;
         if (!this.shouldRender()) {
-            this.onDirtyDiffUpdateEmitter.fire({ editor, added: [], removed: [], modified: [] });
+            this.onDirtyDiffUpdateEmitter.fire({ editor, changes: [] });
             return;
         }
         if (this.updateTimeout) {
@@ -196,7 +207,7 @@ export class DirtyDiffModel implements Disposable {
                 // a new update task should be scheduled anyway.
                 return;
             }
-            const dirtyDiffUpdate = <DirtyDiffUpdate>{ editor, ...dirtyDiff };
+            const dirtyDiffUpdate = <DirtyDiffUpdate>{ editor, previousRevisionUri: previous.uri, ...dirtyDiff };
             this.onDirtyDiffUpdateEmitter.fire(dirtyDiffUpdate);
         }, 100);
     }
@@ -247,9 +258,13 @@ export class DirtyDiffModel implements Disposable {
         return modelUri.startsWith(repoUri) && this.previousRevision.isVersionControlled();
     }
 
-    protected async getPreviousRevisionContent(): Promise<ContentLines | undefined> {
-        const contents = await this.previousRevision.getContents(this.staged);
-        return contents ? ContentLines.fromString(contents) : undefined;
+    protected async getPreviousRevisionContent(): Promise<DirtyDiffModel.PreviousRevisionContent | undefined> {
+        const { previousRevision, staged } = this;
+        const contents = await previousRevision.getContents(staged);
+        if (contents) {
+            const uri = previousRevision.getOriginalUri?.(staged);
+            return { ...ContentLines.fromString(contents), uri };
+        }
     }
 
     dispose(): void {
@@ -278,16 +293,18 @@ export namespace DirtyDiffModel {
     }
 
     export function documentContentLines(document: TextEditorDocument): ContentLines {
-        return {
-            length: document.lineCount,
-            getLineContent: line => document.getLineContent(line + 1),
-        };
+        return ContentLines.fromTextEditorDocument(document);
     }
 
     export interface PreviousFileRevision {
         readonly fileUri: URI;
         getContents(staged: boolean): Promise<string>;
         isVersionControlled(): Promise<boolean>;
+        getOriginalUri?(staged: boolean): URI;
+    }
+
+    export interface PreviousRevisionContent extends ContentLines {
+        readonly uri?: URI;
     }
 
 }

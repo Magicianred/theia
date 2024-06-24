@@ -1,0 +1,47 @@
+name: Publish Next
+
+permissions:
+  id-token: write
+
+on: workflow_dispatch
+
+jobs:
+  publish:
+    name: Perform Publishing
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+        with:
+          # To fetch all history for all branches and tags.
+          # Required for lerna to determine the version of the next package.
+          fetch-depth: 0
+
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@1a4442cacd436585916779262731d5b162bc6ec7 # v3.8.2
+        with:
+          node-version: 18.x
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Use Python 3.11
+        uses: actions/setup-python@b64ffcaf5b410884ad320a9cfac8866006a109aa # v4.8.0
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        shell: bash
+        run: |
+          yarn global add node-gyp
+          yarn --skip-integrity-check --network-timeout 100000
+        env:
+          NODE_OPTIONS: --max_old_space_size=4096
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # https://github.com/microsoft/vscode-ripgrep/issues/9
+
+      - name: Publish NPM
+        shell: bash
+        run: |
+          yarn publish:next
+        env:
+          NPM_CONFIG_PROVENANCE: "true"
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}

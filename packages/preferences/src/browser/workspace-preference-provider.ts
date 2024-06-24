@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -38,7 +38,7 @@ export class WorkspacePreferenceProvider extends PreferenceProvider {
     protected readonly toDisposeOnEnsureDelegateUpToDate = new DisposableCollection();
 
     @postConstruct()
-    protected async init(): Promise<void> {
+    protected init(): void {
         this.workspaceService.ready.then(() => {
             // If there is no workspace after the workspace service is initialized, then no more work is needed for this provider to be ready.
             // If there is a workspace, then we wait for the new delegate to be ready before declaring this provider ready.
@@ -46,14 +46,16 @@ export class WorkspacePreferenceProvider extends PreferenceProvider {
                 this._ready.resolve();
             }
         });
-        this.toDispose.push(this.toDisposeOnEnsureDelegateUpToDate);
         this.workspaceService.onWorkspaceLocationChanged(() => this.ensureDelegateUpToDate());
         this.workspaceService.onWorkspaceChanged(() => this.ensureDelegateUpToDate());
     }
 
-    getConfigUri(resourceUri: string | undefined = this.ensureResourceUri(), sectionName?: string): URI | undefined {
-        const delegate = this.delegate;
-        return delegate && delegate.getConfigUri(resourceUri, sectionName);
+    override getConfigUri(resourceUri: string | undefined = this.ensureResourceUri(), sectionName?: string): URI | undefined {
+        return this.delegate?.getConfigUri(resourceUri, sectionName);
+    }
+
+    override getContainingConfigUri(resourceUri: string | undefined = this.ensureResourceUri(), sectionName?: string): URI | undefined {
+        return this.delegate?.getContainingConfigUri?.(resourceUri, sectionName);
     }
 
     protected _delegate: PreferenceProvider | undefined;
@@ -65,6 +67,7 @@ export class WorkspacePreferenceProvider extends PreferenceProvider {
         const delegate = this.createDelegate();
         if (this._delegate !== delegate) {
             this.toDisposeOnEnsureDelegateUpToDate.dispose();
+            this.toDispose.push(this.toDisposeOnEnsureDelegateUpToDate);
 
             this._delegate = delegate;
 
@@ -98,12 +101,12 @@ export class WorkspacePreferenceProvider extends PreferenceProvider {
         });
     }
 
-    get<T>(preferenceName: string, resourceUri: string | undefined = this.ensureResourceUri()): T | undefined {
+    override get<T>(preferenceName: string, resourceUri: string | undefined = this.ensureResourceUri()): T | undefined {
         const delegate = this.delegate;
         return delegate ? delegate.get<T>(preferenceName, resourceUri) : undefined;
     }
 
-    resolve<T>(preferenceName: string, resourceUri: string | undefined = this.ensureResourceUri()): { value?: T, configUri?: URI } {
+    override resolve<T>(preferenceName: string, resourceUri: string | undefined = this.ensureResourceUri()): { value?: T, configUri?: URI } {
         const delegate = this.delegate;
         return delegate ? delegate.resolve<T>(preferenceName, resourceUri) : {};
     }

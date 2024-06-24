@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2019 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
@@ -33,6 +33,8 @@ import { LabelProvider } from '@theia/core/lib/browser/label-provider';
 import { GitCommitDetailWidgetOptions } from './history/git-commit-detail-widget-options';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { ScmInput } from '@theia/scm/lib/browser/scm-input';
+import { nls } from '@theia/core/lib/common/nls';
+import { GitPreferences } from './git-preferences';
 
 @injectable()
 export class GitScmProviderOptions {
@@ -50,11 +52,15 @@ export class GitScmProvider implements ScmProvider {
         this.onDidChangeEmitter.fire(undefined);
     }
 
+    private readonly onDidChangeCommitTemplateEmitter = new Emitter<string>();
+    readonly onDidChangeCommitTemplate = this.onDidChangeCommitTemplateEmitter.event;
+
     private readonly onDidChangeStatusBarCommandsEmitter = new Emitter<ScmCommand[] | undefined>();
     readonly onDidChangeStatusBarCommands = this.onDidChangeStatusBarCommandsEmitter.event;
 
     private readonly toDispose = new DisposableCollection(
         this.onDidChangeEmitter,
+        this.onDidChangeCommitTemplateEmitter,
         this.onDidChangeStatusBarCommandsEmitter
     );
 
@@ -79,8 +85,11 @@ export class GitScmProvider implements ScmProvider {
     @inject(LabelProvider)
     protected readonly labelProvider: LabelProvider;
 
+    @inject(GitPreferences)
+    protected readonly gitPreferences: GitPreferences;
+
     readonly id = 'git';
-    readonly label = 'Git';
+    readonly label = nls.localize('vscode.git/package/displayName', 'Git');
 
     dispose(): void {
         this.toDispose.dispose();
@@ -89,6 +98,11 @@ export class GitScmProvider implements ScmProvider {
     @postConstruct()
     protected init(): void {
         this._amendSupport = new GitAmendSupport(this, this.repository, this.git);
+        this.toDispose.push(this.gitPreferences.onPreferenceChanged(e => {
+            if (e.preferenceName === 'git.untrackedChanges' && e.affects(this.rootUri)) {
+                this.setStatus(this.getStatus());
+            }
+        }));
     }
 
     get repository(): Repository {
@@ -106,8 +120,8 @@ export class GitScmProvider implements ScmProvider {
     get acceptInputCommand(): ScmCommand | undefined {
         return {
             command: 'git.commit.all',
-            tooltip: 'Commit all the staged changes',
-            title: 'Commit'
+            tooltip: nls.localize('vscode.git/package/command.commitAll', 'Commit all the staged changes'),
+            title: nls.localize('vscode.git/package/command.commit', 'Commit')
         };
     }
 
@@ -155,11 +169,25 @@ export class GitScmProvider implements ScmProvider {
                 }
             }
         }
-        state.groups.push(this.createGroup('merge', 'Merge Changes', state.mergeChanges, true));
-        state.groups.push(this.createGroup('index', 'Staged changes', state.stagedChanges, true));
-        state.groups.push(this.createGroup('workingTree', 'Changes', state.unstagedChanges, false));
+        const untrackedChangesPreference = this.gitPreferences['git.untrackedChanges'];
+        const forWorkingTree = untrackedChangesPreference === 'mixed'
+            ? state.unstagedChanges
+            : state.unstagedChanges.filter(change => change.status !== GitFileStatus.New);
+        const forUntracked = untrackedChangesPreference === 'separate'
+            ? state.unstagedChanges.filter(change => change.status === GitFileStatus.New)
+            : [];
+        const hideWorkingIfEmpty = forUntracked.length > 0;
+        state.groups.push(this.createGroup('merge', nls.localize('vscode.git/repository/merge changes', 'Merge Changes'), state.mergeChanges, true));
+        state.groups.push(this.createGroup('index', nls.localize('vscode.git/repository/staged changes', 'Staged changes'), state.stagedChanges, true));
+        state.groups.push(this.createGroup('workingTree', nls.localize('vscode.git/repository/changes', 'Changes'), forWorkingTree, hideWorkingIfEmpty));
+        state.groups.push(this.createGroup('untrackedChanges', nls.localize('vscode.git/repository/untracked changes', 'Untracked Changes'), forUntracked, true));
         this.state = state;
-        this.input.placeholder = `Message (press {0} to commit${status && status.branch ? ' on \'' + status.branch + '\'' : ''})`;
+        if (status && status.branch) {
+            this.input.placeholder = nls.localize('vscode.git/repository/commitMessageWithHeadLabel', 'Message (press {0} to commit on {1})', '{0}', status.branch);
+        } else {
+            this.input.placeholder = nls.localize('vscode.git/repository/commitMessage', 'Message (press {0} to commit)');
+        }
+
         this.fireDidChange();
     }
 
@@ -186,7 +214,8 @@ export class GitScmProvider implements ScmProvider {
             decorations: {
                 letter: GitFileStatus.toAbbreviation(change.status, change.staged),
                 color: GitFileStatus.getColor(change.status, change.staged),
-                tooltip: GitFileStatus.toString(change.status)
+                tooltip: GitFileStatus.toString(change.status),
+                strikeThrough: GitFileStatus.toStrikethrough(change.status)
             },
             open: async () => this.open(change, { mode: 'reveal' })
         });
@@ -212,13 +241,21 @@ export class GitScmProvider implements ScmProvider {
                 return DiffUris.encode(
                     fromFileUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('HEAD'),
                     changeUri.withScheme(GIT_RESOURCE_SCHEME),
-                    this.labelProvider.getName(changeUri) + ' (Index)');
+                    nls.localize(
+                        'theia/git/tabTitleIndex',
+                        '{0} (Index)',
+                        this.labelProvider.getName(changeUri)
+                    ));
             }
             if (this.stagedChanges.find(c => c.uri === change.uri)) {
                 return DiffUris.encode(
                     fromFileUri.withScheme(GIT_RESOURCE_SCHEME),
                     changeUri,
-                    this.labelProvider.getName(changeUri) + ' (Working tree)');
+                    nls.localize(
+                        'theia/git/tabTitleWorkingTree',
+                        '{0} (Working tree)',
+                        this.labelProvider.getName(changeUri)
+                    ));
             }
             if (this.mergeChanges.find(c => c.uri === change.uri)) {
                 return changeUri;
@@ -226,7 +263,11 @@ export class GitScmProvider implements ScmProvider {
             return DiffUris.encode(
                 fromFileUri.withScheme(GIT_RESOURCE_SCHEME).withQuery('HEAD'),
                 changeUri,
-                this.labelProvider.getName(changeUri) + ' (Working tree)');
+                nls.localize(
+                    'theia/git/tabTitleWorkingTree',
+                    '{0} (Working tree)',
+                    this.labelProvider.getName(changeUri)
+                ));
         }
         if (change.staged) {
             return changeUri.withScheme(GIT_RESOURCE_SCHEME);
@@ -235,7 +276,11 @@ export class GitScmProvider implements ScmProvider {
             return DiffUris.encode(
                 changeUri.withScheme(GIT_RESOURCE_SCHEME),
                 changeUri,
-                this.labelProvider.getName(changeUri) + ' (Working tree)');
+                nls.localize(
+                    'theia/git/tabTitleWorkingTree',
+                    '{0} (Working tree)',
+                    this.labelProvider.getName(changeUri)
+                ));
         }
         return changeUri;
     }
@@ -276,8 +321,7 @@ export class GitScmProvider implements ScmProvider {
                     const resourceUri = new URI(uri);
                     return unstagedChanges.some(change => resourceUri.isEqualOrParent(new URI(change.uri)))
                         || mergeChanges.some(change => resourceUri.isEqualOrParent(new URI(change.uri)));
-                }
-                );
+                });
             if (unstagedUris.length !== 0) {
                 // TODO resolve deletion conflicts
                 // TODO confirm staging of a unresolved file
@@ -292,7 +336,7 @@ export class GitScmProvider implements ScmProvider {
         try {
             const { repository, stagedChanges } = this;
             const uris = stagedChanges.map(c => c.uri);
-            await this.git.unstage(repository, uris);
+            await this.git.unstage(repository, uris, { reset: 'index' });
         } catch (error) {
             this.gitErrorHandler.handleError(error);
         }
@@ -308,7 +352,7 @@ export class GitScmProvider implements ScmProvider {
                 }
                 );
             if (stagedUris.length !== 0) {
-                await this.git.unstage(repository, uris);
+                await this.git.unstage(repository, uris, { reset: 'index' });
             }
         } catch (error) {
             this.gitErrorHandler.handleError(error);
@@ -320,9 +364,9 @@ export class GitScmProvider implements ScmProvider {
             try {
                 // discard new files
                 const newUris = this.unstagedChanges.filter(c => c.status === GitFileStatus.New).map(c => c.uri);
-                this.deleteAll(newUris);
+                await this.deleteAll(newUris);
                 // unstage changes
-                const uris = this.unstagedChanges.map(c => c.uri);
+                const uris = this.unstagedChanges.filter(c => c.status !== GitFileStatus.New).map(c => c.uri);
                 await this.git.unstage(this.repository, uris, { treeish: 'HEAD', reset: 'working-tree' });
             } catch (error) {
                 this.gitErrorHandler.handleError(error);
@@ -371,7 +415,7 @@ export class GitScmProvider implements ScmProvider {
                             this.gitErrorHandler.handleError(error);
                         }
                     } else {
-                        await this.commands.executeCommand(WorkspaceCommands.FILE_DELETE.id, new URI(pair.uri));
+                        await this.commands.executeCommand(WorkspaceCommands.FILE_DELETE.id, [new URI(pair.uri)]);
                     }
                 };
                 return discardSingle();
@@ -387,15 +431,15 @@ export class GitScmProvider implements ScmProvider {
             fileText = `${paths.length} files`;
         }
         return new ConfirmDialog({
-            title: 'Discard changes',
-            msg: `Do you really want to discard changes in ${fileText}?`
+            title: nls.localize('vscode.git/package/command.clean', 'Discard Changes'),
+            msg: nls.localize('vscode.git/commands/confirm discard', 'Do you really want to discard changes in {0}?', fileText)
         }).open();
     }
 
     protected confirmAll(): Promise<boolean | undefined> {
         return new ConfirmDialog({
-            title: 'Discard All Changes',
-            msg: 'Do you really want to discard all changes?'
+            title: nls.localize('vscode.git/package/command.cleanAll', 'Discard All Changes'),
+            msg: nls.localize('vscode.git/commands/confirm discard all', 'Do you really want to discard all changes?')
         }).open();
     }
 

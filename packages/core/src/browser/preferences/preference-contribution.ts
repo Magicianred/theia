@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as Ajv from 'ajv';
 import { inject, injectable, interfaces, named, postConstruct } from 'inversify';
@@ -20,23 +20,21 @@ import { ContributionProvider, bindContributionProvider, Emitter, Event, Disposa
 import { PreferenceScope } from './preference-scope';
 import { PreferenceProvider, PreferenceProviderDataChange } from './preference-provider';
 import {
-    PreferenceSchema, PreferenceSchemaProperties, PreferenceDataSchema, PreferenceItem, PreferenceSchemaProperty, PreferenceDataProperty, JsonType
+    PreferenceSchema, PreferenceSchemaProperties, PreferenceDataSchema, PreferenceItem, PreferenceSchemaProperty, PreferenceDataProperty
 } from '../../common/preferences/preference-schema';
 import { FrontendApplicationConfigProvider } from '../frontend-application-config-provider';
 import { FrontendApplicationConfig } from '@theia/application-package/lib/application-props';
 import { bindPreferenceConfigurations, PreferenceConfigurations } from './preference-configurations';
-export { PreferenceSchema, PreferenceSchemaProperties, PreferenceDataSchema, PreferenceItem, PreferenceSchemaProperty, PreferenceDataProperty, JsonType };
-import { Mutable } from '../../common/types';
-import { OverridePreferenceName, PreferenceLanguageOverrideService } from './preference-language-override-service';
-
-/**
- * @deprecated since 1.13.0 import from @theia/core/lib/browser/preferences/preference-language-override-service.
- */
-export { OVERRIDE_PROPERTY_PATTERN } from './preference-language-override-service';
+export { PreferenceSchema, PreferenceSchemaProperties, PreferenceDataSchema, PreferenceItem, PreferenceSchemaProperty, PreferenceDataProperty };
+import { isObject, Mutable } from '../../common/types';
+import { PreferenceLanguageOverrideService } from './preference-language-override-service';
+import { JSONValue } from '@phosphor/coreutils';
 
 /* eslint-disable guard-for-in, @typescript-eslint/no-explicit-any */
 
 export const PreferenceContribution = Symbol('PreferenceContribution');
+
+export const DefaultOverridesPreferenceSchemaId = 'defaultOverrides';
 
 /**
  * A {@link PreferenceContribution} allows adding additional custom preferences.
@@ -84,7 +82,7 @@ export interface FrontendApplicationPreferenceConfig extends FrontendApplication
 }
 export namespace FrontendApplicationPreferenceConfig {
     export function is(config: FrontendApplicationConfig): config is FrontendApplicationPreferenceConfig {
-        return 'preferences' in config && typeof config['preferences'] === 'object';
+        return isObject(config.preferences);
     }
 }
 
@@ -97,9 +95,9 @@ export namespace FrontendApplicationPreferenceConfig {
 export class PreferenceSchemaProvider extends PreferenceProvider {
 
     protected readonly preferences: { [name: string]: any } = {};
-    protected readonly combinedSchema: PreferenceDataSchema = { properties: {}, patternProperties: {} };
-    protected readonly workspaceSchema: PreferenceDataSchema = { properties: {}, patternProperties: {} };
-    protected readonly folderSchema: PreferenceDataSchema = { properties: {}, patternProperties: {} };
+    protected readonly combinedSchema: PreferenceDataSchema = { properties: {}, patternProperties: {}, allowComments: true, allowTrailingCommas: true, };
+    protected readonly workspaceSchema: PreferenceDataSchema = { properties: {}, patternProperties: {}, allowComments: true, allowTrailingCommas: true, };
+    protected readonly folderSchema: PreferenceDataSchema = { properties: {}, patternProperties: {}, allowComments: true, allowTrailingCommas: true, };
 
     @inject(ContributionProvider) @named(PreferenceContribution)
     protected readonly preferenceContributions: ContributionProvider<PreferenceContribution>;
@@ -187,45 +185,63 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         return inverseChanges;
     }
 
-    protected doSetSchema(schema: PreferenceSchema): PreferenceProviderDataChange[] {
+    protected validateSchema(schema: PreferenceSchema): void {
         const ajv = new Ajv();
         const valid = ajv.validateSchema(schema);
         if (!valid) {
             const errors = !!ajv.errors ? ajv.errorsText(ajv.errors) : 'unknown validation error';
             console.warn('A contributed preference schema has validation issues : ' + errors);
         }
+    }
+
+    protected doSetSchema(schema: PreferenceSchema): PreferenceProviderDataChange[] {
+        if (FrontendApplicationConfigProvider.get().validatePreferencesSchema) {
+            this.validateSchema(schema);
+        }
         const scope = PreferenceScope.Default;
         const domain = this.getDomain();
         const changes: PreferenceProviderDataChange[] = [];
         const defaultScope = PreferenceSchema.getDefaultScope(schema);
         const overridable = schema.overridable || false;
-        for (const preferenceName of Object.keys(schema.properties)) {
-            if (this.combinedSchema.properties[preferenceName]) {
+        for (const [preferenceName, rawSchemaProps] of Object.entries(schema.properties)) {
+            if (this.combinedSchema.properties[preferenceName] && DefaultOverridesPreferenceSchemaId !== schema.id) {
                 console.error('Preference name collision detected in the schema for property: ' + preferenceName);
             } else {
-                const schemaProps = PreferenceDataProperty.fromPreferenceSchemaProperty(schema.properties[preferenceName], defaultScope);
-                if (typeof schemaProps.overridable !== 'boolean' && overridable) {
-                    schemaProps.overridable = true;
-                }
-                if (schemaProps.overridable) {
-                    this.overridePatternProperties.properties[preferenceName] = schemaProps;
-                }
-                this.updateSchemaProps(preferenceName, schemaProps);
-
-                const schemaDefault = this.getDefaultValue(schemaProps);
-                const configuredDefault = this.getConfiguredDefault(preferenceName);
-                if (this.preferenceOverrideService.testOverrideValue(preferenceName, schemaDefault)) {
-                    schemaProps.defaultValue = PreferenceSchemaProperties.is(configuredDefault)
-                        ? PreferenceProvider.merge(schemaDefault, configuredDefault)
-                        : schemaDefault;
-                    for (const overriddenPreferenceName in schemaProps.defaultValue) {
-                        const overrideValue = schemaDefault[overriddenPreferenceName];
-                        const overridePreferenceName = `${preferenceName}.${overriddenPreferenceName}`;
-                        changes.push(this.doSetPreferenceValue(overridePreferenceName, overrideValue, { scope, domain }));
+                let schemaProps;
+                if (this.combinedSchema.properties[preferenceName] && DefaultOverridesPreferenceSchemaId === schema.id) {
+                    // update existing default value in schema
+                    schemaProps = PreferenceDataProperty.fromPreferenceSchemaProperty(rawSchemaProps, defaultScope);
+                    this.updateSchemaPropsDefault(preferenceName, schemaProps);
+                } else if (!rawSchemaProps.hasOwnProperty('included') || rawSchemaProps.included) {
+                    // add overrides for languages
+                    schemaProps = PreferenceDataProperty.fromPreferenceSchemaProperty(rawSchemaProps, defaultScope);
+                    if (typeof schemaProps.overridable !== 'boolean' && overridable) {
+                        schemaProps.overridable = true;
                     }
-                } else {
-                    schemaProps.defaultValue = configuredDefault === undefined ? schemaDefault : configuredDefault;
-                    changes.push(this.doSetPreferenceValue(preferenceName, schemaProps.defaultValue, { scope, domain }));
+                    if (schemaProps.overridable) {
+                        this.overridePatternProperties.properties[preferenceName] = schemaProps;
+                    }
+                    this.updateSchemaProps(preferenceName, schemaProps);
+                }
+
+                if (schemaProps !== undefined) {
+                    const schemaDefault = this.getDefaultValue(schemaProps);
+                    const configuredDefault = this.getConfiguredDefault(preferenceName);
+                    if (this.preferenceOverrideService.testOverrideValue(preferenceName, schemaDefault)) {
+                        schemaProps.defaultValue = PreferenceSchemaProperties.is(configuredDefault)
+                            ? PreferenceProvider.merge(schemaDefault, configuredDefault)
+                            : schemaDefault;
+                        if (schemaProps.defaultValue && PreferenceSchemaProperties.is(schemaProps.defaultValue)) {
+                            for (const overriddenPreferenceName in schemaProps.defaultValue) {
+                                const overrideValue = schemaDefault[overriddenPreferenceName];
+                                const overridePreferenceName = `${preferenceName}.${overriddenPreferenceName}`;
+                                changes.push(this.doSetPreferenceValue(overridePreferenceName, overrideValue, { scope, domain }));
+                            }
+                        }
+                    } else {
+                        schemaProps.defaultValue = configuredDefault === undefined ? schemaDefault : configuredDefault;
+                        changes.push(this.doSetPreferenceValue(preferenceName, schemaProps.defaultValue, { scope, domain }));
+                    }
                 }
             }
         }
@@ -241,7 +257,7 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         return { preferenceName, oldValue, newValue, scope, domain };
     }
 
-    protected getDefaultValue(property: PreferenceItem): any {
+    getDefaultValue(property: PreferenceItem): JSONValue {
         if (property.defaultValue !== undefined) {
             return property.defaultValue;
         }
@@ -352,6 +368,19 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         return [][Symbol.iterator]();
     }
 
+    getSchemaProperty(key: string): PreferenceDataProperty | undefined {
+        return this.combinedSchema.properties[key];
+    }
+
+    /**
+     * {@link property} will be assigned to field {@link key} in the schema.
+     * Pass a new object to invalidate old schema.
+     */
+    updateSchemaProperty(key: string, property: PreferenceDataProperty): void {
+        this.updateSchemaProps(key, property);
+        this.fireDidPreferenceSchemaChanged();
+    }
+
     protected updateSchemaProps(key: string, property: PreferenceDataProperty): void {
         this.combinedSchema.properties[key] = property;
 
@@ -363,6 +392,19 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
             case PreferenceScope.Workspace:
                 this.workspaceSchema.properties[key] = property;
                 break;
+        }
+    }
+
+    protected updateSchemaPropsDefault(key: string, property: PreferenceDataProperty): void {
+        this.combinedSchema.properties[key].default = property.default;
+        this.combinedSchema.properties[key].defaultValue = property.defaultValue;
+        if (this.workspaceSchema.properties[key]) {
+            this.workspaceSchema.properties[key].default = property.default;
+            this.workspaceSchema.properties[key].defaultValue = property.defaultValue;
+        }
+        if (this.folderSchema.properties[key]) {
+            this.folderSchema.properties[key].default = property.default;
+            this.folderSchema.properties[key].defaultValue = property.defaultValue;
         }
     }
 
@@ -391,24 +433,4 @@ export class PreferenceSchemaProvider extends PreferenceProvider {
         }
     }
 
-    /**
-     * @deprecated since 1.13.0 use `PreferenceLanguageOverrideService.overridePreferenceName`
-     */
-    overridePreferenceName(override: OverridePreferenceName): string {
-        return this.preferenceOverrideService.overridePreferenceName(override);
-    }
-
-    /**
-     * @deprecated since 1.13.0 use `PreferenceLanguageOverrideService.testOverrideValue`
-     */
-    testOverrideValue(name: string, value: any): value is PreferenceSchemaProperties {
-        return this.preferenceOverrideService.testOverrideValue(name, value);
-    }
-
-    /**
-     * @deprecated since 1.13.0 use `PreferenceLanguageOverrideService.overridenPreferenceName`
-     */
-    overriddenPreferenceName(name: string): OverridePreferenceName | undefined {
-        return this.preferenceOverrideService.overriddenPreferenceName(name);
-    }
 }

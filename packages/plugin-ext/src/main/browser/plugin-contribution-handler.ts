@@ -1,32 +1,36 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, named } from '@theia/core/shared/inversify';
-import { ITokenTypeMap, IEmbeddedLanguagesMap, StandardTokenType } from 'vscode-textmate';
+import { ITokenTypeMap, IEmbeddedLanguagesMap } from 'vscode-textmate';
+import { StandardTokenType } from 'vscode-textmate/release/encodedTokenAttributes';
 import { TextmateRegistry, getEncodedLanguageId, MonacoTextmateService, GrammarDefinition } from '@theia/monaco/lib/browser/textmate';
 import { MenusContributionPointHandler } from './menus/menus-contribution-handler';
 import { PluginViewRegistry } from './view/plugin-view-registry';
 import { PluginCustomEditorRegistry } from './custom-editors/plugin-custom-editor-registry';
-import { PluginContribution, IndentationRules, FoldingRules, ScopeMap, DeployedPlugin, GrammarsContribution } from '../../common';
+import {
+    PluginContribution, IndentationRules, FoldingRules, ScopeMap, DeployedPlugin,
+    GrammarsContribution, EnterAction, OnEnterRule, RegExpOptions, IconContribution, PluginPackage
+} from '../../common';
 import {
     DefaultUriLabelProviderContribution,
     LabelProviderContribution,
     PreferenceSchemaProvider
 } from '@theia/core/lib/browser';
-import { PreferenceLanguageOverrideService, PreferenceSchema, PreferenceSchemaProperties } from '@theia/core/lib/browser/preferences';
+import { DefaultOverridesPreferenceSchemaId, PreferenceLanguageOverrideService, PreferenceSchema, PreferenceSchemaProperties } from '@theia/core/lib/browser/preferences';
 import { KeybindingsContributionPointHandler } from './keybindings/keybindings-contribution-handler';
 import { MonacoSnippetSuggestProvider } from '@theia/monaco/lib/browser/monaco-snippet-suggest-provider';
 import { PluginSharedStyle } from './plugin-shared-style';
@@ -34,12 +38,22 @@ import { CommandRegistry, Command, CommandHandler } from '@theia/core/lib/common
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { Emitter } from '@theia/core/lib/common/event';
 import { TaskDefinitionRegistry, ProblemMatcherRegistry, ProblemPatternRegistry } from '@theia/task/lib/browser';
+import { NotebookRendererRegistry, NotebookTypeRegistry } from '@theia/notebook/lib/browser';
 import { PluginDebugService } from './debug/plugin-debug-service';
 import { DebugSchemaUpdater } from '@theia/debug/lib/browser/debug-schema-updater';
 import { MonacoThemingService } from '@theia/monaco/lib/browser/monaco-theming-service';
 import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
+import { PluginIconService } from './plugin-icon-service';
 import { PluginIconThemeService } from './plugin-icon-theme-service';
 import { ContributionProvider } from '@theia/core/lib/common';
+import * as monaco from '@theia/monaco-editor-core';
+import { ContributedTerminalProfileStore, TerminalProfileStore } from '@theia/terminal/lib/browser/terminal-profile-service';
+import { TerminalWidget } from '@theia/terminal/lib/browser/base/terminal-widget';
+import { TerminalService } from '@theia/terminal/lib/browser/base/terminal-service';
+import { PluginTerminalRegistry } from './plugin-terminal-registry';
+import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
+import { LanguageService } from '@theia/core/lib/browser/language-service';
+import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/base/common/themables';
 
 @injectable()
 export class PluginContributionHandler {
@@ -76,6 +90,9 @@ export class PluginContributionHandler {
     @inject(CommandRegistry)
     protected readonly commands: CommandRegistry;
 
+    @inject(LanguageService)
+    protected readonly languageService: LanguageService;
+
     @inject(PluginSharedStyle)
     protected readonly style: PluginSharedStyle;
 
@@ -100,11 +117,32 @@ export class PluginContributionHandler {
     @inject(ColorRegistry)
     protected readonly colors: ColorRegistry;
 
+    @inject(PluginIconService)
+    protected readonly iconService: PluginIconService;
+
     @inject(PluginIconThemeService)
     protected readonly iconThemeService: PluginIconThemeService;
 
+    @inject(TerminalService)
+    protected readonly terminalService: TerminalService;
+
+    @inject(PluginTerminalRegistry)
+    protected readonly pluginTerminalRegistry: PluginTerminalRegistry;
+
+    @inject(ContributedTerminalProfileStore)
+    protected readonly contributedProfileStore: TerminalProfileStore;
+
+    @inject(NotebookTypeRegistry)
+    protected readonly notebookTypeRegistry: NotebookTypeRegistry;
+
+    @inject(NotebookRendererRegistry)
+    protected readonly notebookRendererRegistry: NotebookRendererRegistry;
+
     @inject(ContributionProvider) @named(LabelProviderContribution)
     protected readonly contributionProvider: ContributionProvider<LabelProviderContribution>;
+
+    @inject(ContextKeyService)
+    protected readonly contextKeyService: ContextKeyService;
 
     protected readonly commandHandlers = new Map<string, CommandHandler['execute'] | undefined>();
 
@@ -161,6 +199,11 @@ export class PluginContributionHandler {
                     firstLine: lang.firstLine,
                     mimetypes: lang.mimetypes
                 });
+                if (lang.icon) {
+                    const languageIcon = this.style.toFileIconClass(lang.icon);
+                    pushContribution(`language.${lang.id}.icon`, () => languageIcon);
+                    pushContribution(`language.${lang.id}.iconRegistration`, () => this.languageService.registerIcon(lang.id, languageIcon.object.iconClass));
+                }
                 const langConfiguration = lang.configuration;
                 if (langConfiguration) {
                     pushContribution(`language.${lang.id}.configuration`, () => monaco.languages.setLanguageConfiguration(lang.id, {
@@ -170,7 +213,8 @@ export class PluginContributionHandler {
                         comments: langConfiguration.comments,
                         folding: this.convertFolding(langConfiguration.folding),
                         surroundingPairs: langConfiguration.surroundingPairs,
-                        indentationRules: this.convertIndentationRules(langConfiguration.indentationRules)
+                        indentationRules: this.convertIndentationRules(langConfiguration.indentationRules),
+                        onEnterRules: this.convertOnEnterRules(langConfiguration.onEnterRules),
                     }));
                 }
             }
@@ -219,7 +263,9 @@ export class PluginContributionHandler {
                     pushContribution(`grammar.language.${language}.scope`, () => this.grammarsRegistry.mapLanguageIdToTextmateGrammar(language, grammar.scope));
                     pushContribution(`grammar.language.${language}.configuration`, () => this.grammarsRegistry.registerGrammarConfiguration(language, {
                         embeddedLanguages: this.convertEmbeddedLanguages(grammar.embeddedLanguages, logWarning),
-                        tokenTypes: this.convertTokenTypes(grammar.tokenTypes)
+                        tokenTypes: this.convertTokenTypes(grammar.tokenTypes),
+                        balancedBracketSelectors: grammar.balancedBracketScopes ?? ['*'],
+                        unbalancedBracketSelectors: grammar.balancedBracketScopes,
                     }));
                 }
                 // activate grammars only once everything else is loaded.
@@ -242,7 +288,7 @@ export class PluginContributionHandler {
         if (contributions.customEditors) {
             for (const customEditor of contributions.customEditors) {
                 pushContribution(`customEditors.${customEditor.viewType}`,
-                    () => this.customEditorRegistry.registerCustomEditor(customEditor)
+                    () => this.customEditorRegistry.registerCustomEditor(customEditor, plugin)
                 );
             }
         }
@@ -299,8 +345,22 @@ export class PluginContributionHandler {
             }
         }
 
-        if (contributions.colors) {
-            pushContribution('colors', () => this.colors.register(...contributions.colors));
+        if (contributions.icons && contributions.icons.length) {
+            for (const icon of contributions.icons) {
+                const defaultIcon = icon.defaults;
+                let key: string;
+                if (IconContribution.isIconDefinition(defaultIcon)) {
+                    key = defaultIcon.location;
+                } else {
+                    key = defaultIcon.id;
+                }
+                pushContribution(`icons.${key}`, () => this.iconService.register(icon, plugin));
+            }
+        }
+
+        const colors = contributions.colors;
+        if (colors) {
+            pushContribution('colors', () => this.colors.register(...colors));
         }
 
         if (contributions.taskDefinitions) {
@@ -349,6 +409,52 @@ export class PluginContributionHandler {
             }
         }
 
+        const self = this;
+        if (contributions.terminalProfiles) {
+            for (const profile of contributions.terminalProfiles) {
+                pushContribution(`terminalProfiles.${profile.id}`, () => {
+                    this.contributedProfileStore.registerTerminalProfile(profile.title, {
+                        async start(): Promise<TerminalWidget> {
+                            const terminalId = await self.pluginTerminalRegistry.start(profile.id);
+                            const result = self.terminalService.getById(terminalId);
+                            if (!result) {
+                                throw new Error(`Error starting terminal from profile ${profile.id}`);
+                            }
+                            return result;
+
+                        }
+                    });
+                    return Disposable.create(() => {
+                        this.contributedProfileStore.unregisterTerminalProfile(profile.id);
+                    });
+                });
+            }
+        }
+
+        if (contributions.notebooks) {
+            for (const notebook of contributions.notebooks) {
+                pushContribution(`notebook.${notebook.type}`,
+                    () => this.notebookTypeRegistry.registerNotebookType(notebook, plugin.metadata.model.displayName)
+                );
+            }
+        }
+
+        if (contributions.notebookRenderer) {
+            for (const renderer of contributions.notebookRenderer) {
+                pushContribution(`notebookRenderer.${renderer.id}`,
+                    () => this.notebookRendererRegistry.registerNotebookRenderer(renderer, PluginPackage.toPluginUrl(plugin.metadata.model, ''))
+                );
+            }
+        }
+
+        if (contributions.notebookPreload) {
+            for (const preload of contributions.notebookPreload) {
+                pushContribution(`notebookPreloads.${preload.type}:${preload.entrypoint}`,
+                    () => this.notebookRendererRegistry.registerStaticNotebookPreload(preload.type, preload.entrypoint, PluginPackage.toPluginUrl(plugin.metadata.model, ''))
+                );
+            }
+        }
+
         return toDispose;
     }
 
@@ -357,22 +463,22 @@ export class PluginContributionHandler {
             return Disposable.NULL;
         }
         const toDispose = new DisposableCollection();
-        for (const { iconUrl, themeIcon, command, category, title } of contribution.commands) {
+        for (const { iconUrl, themeIcon, command, category, shortTitle, title, originalTitle, enablement } of contribution.commands) {
             const reference = iconUrl && this.style.toIconClass(iconUrl);
-            const icon = themeIcon && monaco.theme.ThemeIcon.fromString(themeIcon);
+            const icon = themeIcon && ThemeIcon.fromString(themeIcon);
             let iconClass;
             if (reference) {
                 toDispose.push(reference);
                 iconClass = reference.object.iconClass;
             } else if (icon) {
-                iconClass = monaco.theme.ThemeIcon.asClassName(icon);
+                iconClass = ThemeIcon.asClassName(icon);
             }
-            toDispose.push(this.registerCommand({ id: command, category, label: title, iconClass }));
+            toDispose.push(this.registerCommand({ id: command, category, shortTitle, label: title, originalLabel: originalTitle, iconClass }, enablement));
         }
         return toDispose;
     }
 
-    registerCommand(command: Command): Disposable {
+    registerCommand(command: Command, enablement?: string): Disposable {
         if (this.hasCommand(command.id)) {
             console.warn(`command '${command.id}' already registered`);
             return Disposable.NULL;
@@ -387,10 +493,26 @@ export class PluginContributionHandler {
                 return handler(...args);
             },
             // Always enabled - a command can be executed programmatically or via the commands palette.
-            isEnabled(): boolean { return true; },
+            isEnabled: () => {
+                if (enablement) {
+                    return this.contextKeyService.match(enablement);
+                }
+                return true;
+            },
             // Visibility rules are defined via the `menus` contribution point.
             isVisible(): boolean { return true; }
         };
+
+        if (enablement) {
+            const contextKeys = this.contextKeyService.parseKeys(enablement);
+            if (contextKeys && contextKeys.size > 0) {
+                commandHandler.onDidChangeEnabled = (listener: () => void) => this.contextKeyService.onDidChange(e => {
+                    if (e.affects(contextKeys)) {
+                        listener();
+                    }
+                });
+            }
+        }
 
         const toDispose = new DisposableCollection();
         if (this.commands.getCommand(command.id)) {
@@ -425,7 +547,7 @@ export class PluginContributionHandler {
 
     protected updateDefaultOverridesSchema(configurationDefaults: PreferenceSchemaProperties): Disposable {
         const defaultOverrides: PreferenceSchema = {
-            id: 'defaultOverrides',
+            id: DefaultOverridesPreferenceSchemaId,
             title: 'Default Configuration Overrides',
             properties: {}
         };
@@ -433,10 +555,17 @@ export class PluginContributionHandler {
         for (const key in configurationDefaults) {
             const defaultValue = configurationDefaults[key];
             if (this.preferenceOverrideService.testOverrideValue(key, defaultValue)) {
+                // language specific override
                 defaultOverrides.properties[key] = {
                     type: 'object',
                     default: defaultValue,
                     description: `Configure editor settings to be overridden for ${key} language.`
+                };
+            } else {
+                // regular configuration override
+                defaultOverrides.properties[key] = {
+                    default: defaultValue,
+                    description: `Configure default setting for ${key}.`
                 };
             }
         }
@@ -446,11 +575,14 @@ export class PluginContributionHandler {
         return Disposable.NULL;
     }
 
-    private createRegex(value: string | undefined): RegExp | undefined {
+    private createRegex(value: string | RegExpOptions | undefined): RegExp | undefined {
         if (typeof value === 'string') {
             return new RegExp(value, '');
         }
-        return undefined;
+        if (typeof value == 'undefined') {
+            return undefined;
+        }
+        return new RegExp(value.pattern, value.flags);
     }
 
     private convertIndentationRules(rules?: IndentationRules): monaco.languages.IndentationRule | undefined {
@@ -481,7 +613,6 @@ export class PluginContributionHandler {
         }
 
         return result;
-
     }
 
     private convertTokenTypes(tokenTypes?: ScopeMap): ITokenTypeMap | undefined {
@@ -527,4 +658,41 @@ export class PluginContributionHandler {
         return result;
     }
 
+    private convertOnEnterRules(onEnterRules?: OnEnterRule[]): monaco.languages.OnEnterRule[] | undefined {
+        if (!onEnterRules) {
+            return undefined;
+        }
+
+        const result: monaco.languages.OnEnterRule[] = [];
+        for (const onEnterRule of onEnterRules) {
+            const rule: monaco.languages.OnEnterRule = {
+                beforeText: this.createRegex(onEnterRule.beforeText)!,
+                afterText: this.createRegex(onEnterRule.afterText),
+                previousLineText: this.createRegex(onEnterRule.previousLineText),
+                action: this.createEnterAction(onEnterRule.action),
+            };
+            result.push(rule);
+        }
+
+        return result;
+    }
+
+    private createEnterAction(action: EnterAction): monaco.languages.EnterAction {
+        let indentAction: monaco.languages.IndentAction;
+        switch (action.indent) {
+            case 'indent':
+                indentAction = monaco.languages.IndentAction.Indent;
+                break;
+            case 'indentOutdent':
+                indentAction = monaco.languages.IndentAction.IndentOutdent;
+                break;
+            case 'outdent':
+                indentAction = monaco.languages.IndentAction.Outdent;
+                break;
+            default:
+                indentAction = monaco.languages.IndentAction.None;
+                break;
+        }
+        return { indentAction, appendText: action.appendText, removeText: action.removeText };
+    }
 }

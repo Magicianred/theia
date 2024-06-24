@@ -1,30 +1,29 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import URI from '@theia/core/lib/common/uri';
 import { LocationService } from './location-service';
 import * as React from '@theia/core/shared/react';
-import * as ReactDOM from '@theia/core/shared/react-dom';
 import { FileService } from '../file-service';
-import { DisposableCollection, Emitter } from '@theia/core/lib/common';
+import { DisposableCollection, Emitter, Path } from '@theia/core/lib/common';
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { FileDialogModel } from '../file-dialog/file-dialog-model';
 import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import { ReactRenderer } from '@theia/core/lib/browser/widgets/react-renderer';
-import { Path } from '@theia/core/lib/common';
+import { codicon } from '@theia/core/lib/browser';
 
 interface AutoSuggestDataEvent {
     parent: string;
@@ -109,16 +108,23 @@ export class LocationListRenderer extends ReactRenderer {
         super(options.host);
         this.service = options.model;
         this.doLoadDrives();
+        this.doAfterRender = this.doAfterRender.bind(this);
     }
 
     @postConstruct()
-    async init(): Promise<void> {
+    protected init(): void {
+        this.doInit();
+    }
+
+    protected async doInit(): Promise<void> {
         const homeDirWithPrefix = await this.variablesServer.getHomeDirUri();
         this.homeDir = (new URI(homeDirWithPrefix)).path.toString();
     }
 
-    render(): void {
-        ReactDOM.render(this.doRender(), this.host, this.doAfterRender);
+    override render(): void {
+        if (!this.toDispose.disposed) {
+            this.hostRoot.render(this.doRender());
+        }
     }
 
     protected initResolveDirectoryCache(): void {
@@ -153,7 +159,7 @@ export class LocationListRenderer extends ReactRenderer {
     protected readonly handleTextInputOnBlur = () => this.toggleToSelectInput();
     protected readonly handleTextInputMouseDown = (e: React.MouseEvent<HTMLSpanElement>) => this.toggleToTextInputOnMouseDown(e);
 
-    protected doRender(): React.ReactElement {
+    protected override doRender(): React.ReactElement {
         return (
             <>
                 {this.renderInputIcon()}
@@ -178,8 +184,9 @@ export class LocationListRenderer extends ReactRenderer {
                 title={this.doShowTextInput
                     ? LocationListRenderer.Tooltips.TOGGLE_SELECT_INPUT
                     : LocationListRenderer.Tooltips.TOGGLE_TEXT_INPUT}
+                ref={this.doAfterRender}
             >
-                <i className={this.doShowTextInput ? 'fa fa-folder-open' : 'fa fa-edit'} />
+                <i className={codicon(this.doShowTextInput ? 'folder-opened' : 'edit')} />
             </span>
         );
     }
@@ -187,7 +194,7 @@ export class LocationListRenderer extends ReactRenderer {
     protected renderTextInput(): React.ReactNode {
         return (
             <input className={'theia-select ' + LocationListRenderer.Styles.LOCATION_TEXT_INPUT_CLASS}
-                defaultValue={this.service.location?.path.toString()}
+                defaultValue={this.service.location?.path.fsPath()}
                 onBlur={this.handleTextInputOnBlur}
                 onChange={this.handleTextInputOnChange}
                 onKeyDown={this.handleTextInputKeyDown}
@@ -278,7 +285,7 @@ export class LocationListRenderer extends ReactRenderer {
     protected renderLocation(location: LocationListRenderer.Location): React.ReactNode {
         const { uri, isDrive } = location;
         const value = uri.toString();
-        return <option value={value} key={uri.toString()}>{isDrive ? uri.path.toString() : uri.displayName}</option>;
+        return <option value={value} key={uri.toString()}>{isDrive ? uri.path.fsPath() : uri.displayName}</option>;
     }
 
     protected onLocationChanged(e: React.ChangeEvent<HTMLSelectElement>): void {
@@ -372,7 +379,7 @@ export class LocationListRenderer extends ReactRenderer {
         return undefined;
     }
 
-    dispose(): void {
+    override dispose(): void {
         super.dispose();
         this.toDisposeOnNewCache.dispose();
     }

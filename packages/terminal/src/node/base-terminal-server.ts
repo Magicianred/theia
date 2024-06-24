@@ -1,34 +1,27 @@
-/********************************************************************************
- * Copyright (C) 2017 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, injectable, named } from '@theia/core/shared/inversify';
-import { ILogger, DisposableCollection, isWindows } from '@theia/core/lib/common';
+import { ILogger, DisposableCollection } from '@theia/core/lib/common';
 import {
     IBaseTerminalServer,
     IBaseTerminalServerOptions,
     IBaseTerminalClient,
     TerminalProcessInfo,
-    EnvironmentVariableCollection,
-    MergedEnvironmentVariableCollection,
-    SerializableEnvironmentVariableCollection,
-    EnvironmentVariableMutator,
-    ExtensionOwnedEnvironmentVariableMutator,
-    EnvironmentVariableMutatorType,
-    EnvironmentVariableCollectionWithPersistence,
-    SerializableExtensionEnvironmentVariableCollection
+    TerminalExitReason
 } from '../common/base-terminal-protocol';
 import { TerminalProcess, ProcessManager, TaskTerminalProcess } from '@theia/process/lib/node';
 import { ShellProcess } from './shell-process';
@@ -37,9 +30,6 @@ import { ShellProcess } from './shell-process';
 export abstract class BaseTerminalServer implements IBaseTerminalServer {
     protected client: IBaseTerminalClient | undefined = undefined;
     protected terminalToDispose = new Map<number, DisposableCollection>();
-
-    readonly collections: Map<string, EnvironmentVariableCollectionWithPersistence> = new Map();
-    mergedCollection: MergedEnvironmentVariableCollection;
 
     constructor(
         @inject(ProcessManager) protected readonly processManager: ProcessManager,
@@ -52,7 +42,6 @@ export abstract class BaseTerminalServer implements IBaseTerminalServer {
                 this.terminalToDispose.delete(id);
             }
         });
-        this.mergedCollection = this.resolveMergedCollection();
     }
 
     abstract create(options: IBaseTerminalServerOptions): Promise<number>;
@@ -76,6 +65,8 @@ export abstract class BaseTerminalServer implements IBaseTerminalServer {
                 // Didn't execute `unregisterProcess` on terminal `exit` event to enable attaching task output to terminal,
                 // Fixes https://github.com/eclipse-theia/theia/issues/2961
                 terminal.unregisterProcess();
+            } else {
+                this.postAttachAttempted(terminal);
             }
         }
     }
@@ -141,7 +132,7 @@ export abstract class BaseTerminalServer implements IBaseTerminalServer {
         this.client.updateTerminalEnvVariables();
     }
 
-    protected postCreate(term: TerminalProcess): void {
+    protected notifyClientOnExit(term: TerminalProcess): DisposableCollection {
         const toDispose = new DisposableCollection();
 
         toDispose.push(term.onError(error => {
@@ -149,8 +140,9 @@ export abstract class BaseTerminalServer implements IBaseTerminalServer {
 
             if (this.client !== undefined) {
                 this.client.onTerminalError({
-                    'terminalId': term.id,
-                    'error': new Error(`Failed to execute terminal process (${error.code})`),
+                    terminalId: term.id,
+                    error: new Error(`Failed to execute terminal process (${error.code})`),
+                    attached: term instanceof TaskTerminalProcess && term.attachmentAttempted
                 });
             }
         }));
@@ -158,122 +150,24 @@ export abstract class BaseTerminalServer implements IBaseTerminalServer {
         toDispose.push(term.onExit(event => {
             if (this.client !== undefined) {
                 this.client.onTerminalExitChanged({
-                    'terminalId': term.id,
-                    'code': event.code,
-                    'signal': event.signal
+                    terminalId: term.id,
+                    code: event.code,
+                    reason: TerminalExitReason.Process,
+                    signal: event.signal,
+                    attached: term instanceof TaskTerminalProcess && term.attachmentAttempted
                 });
             }
         }));
+        return toDispose;
+    }
 
+    protected postCreate(term: TerminalProcess): void {
+        const toDispose = this.notifyClientOnExit(term);
         this.terminalToDispose.set(term.id, toDispose);
     }
 
-    /*---------------------------------------------------------------------------------------------
-     *  Copyright (c) Microsoft Corporation. All rights reserved.
-     *  Licensed under the MIT License. See License.txt in the project root for license information.
-     *--------------------------------------------------------------------------------------------*/
-    // some code copied and modified from https://github.com/microsoft/vscode/blob/1.49.0/src/vs/workbench/contrib/terminal/common/environmentVariableService.ts
-
-    setCollection(extensionIdentifier: string, persistent: boolean, collection: SerializableEnvironmentVariableCollection): void {
-        const translatedCollection = { persistent, map: new Map<string, EnvironmentVariableMutator>(collection) };
-        this.collections.set(extensionIdentifier, translatedCollection);
-        this.updateCollections();
-    }
-
-    deleteCollection(extensionIdentifier: string): void {
-        this.collections.delete(extensionIdentifier);
-        this.updateCollections();
-    }
-
-    private updateCollections(): void {
-        this.persistCollections();
-        this.mergedCollection = this.resolveMergedCollection();
-    }
-
-    protected persistCollections(): void {
-        const collectionsJson: SerializableExtensionEnvironmentVariableCollection[] = [];
-        this.collections.forEach((collection, extensionIdentifier) => {
-            if (collection.persistent) {
-                collectionsJson.push({
-                    extensionIdentifier,
-                    collection: [...this.collections.get(extensionIdentifier)!.map.entries()]
-                });
-            }
-        });
-        if (this.client) {
-            const stringifiedJson = JSON.stringify(collectionsJson);
-            this.client.storeTerminalEnvVariables(stringifiedJson);
-        }
-    }
-
-    private resolveMergedCollection(): MergedEnvironmentVariableCollection {
-        return new MergedEnvironmentVariableCollectionImpl(this.collections);
-    }
-
-}
-
-/*---------------------------------------------------------------------------------------------
-     *  Copyright (c) Microsoft Corporation. All rights reserved.
-     *  Licensed under the MIT License. See License.txt in the project root for license information.
-     *--------------------------------------------------------------------------------------------*/
-// some code copied and modified from https://github.com/microsoft/vscode/blob/1.49.0/src/vs/workbench/contrib/terminal/common/environmentVariableCollection.ts
-
-export class MergedEnvironmentVariableCollectionImpl implements MergedEnvironmentVariableCollection {
-    readonly map: Map<string, ExtensionOwnedEnvironmentVariableMutator[]> = new Map();
-
-    constructor(collections: Map<string, EnvironmentVariableCollection>) {
-        collections.forEach((collection, extensionIdentifier) => {
-            const it = collection.map.entries();
-            let next = it.next();
-            while (!next.done) {
-                const variable = next.value[0];
-                let entry = this.map.get(variable);
-                if (!entry) {
-                    entry = [];
-                    this.map.set(variable, entry);
-                }
-
-                // If the first item in the entry is replace ignore any other entries as they would
-                // just get replaced by this one.
-                if (entry.length > 0 && entry[0].type === EnvironmentVariableMutatorType.Replace) {
-                    next = it.next();
-                    continue;
-                }
-
-                // Mutators get applied in the reverse order than they are created
-                const mutator = next.value[1];
-                entry.unshift({
-                    extensionIdentifier,
-                    value: mutator.value,
-                    type: mutator.type
-                });
-
-                next = it.next();
-            }
-        });
-    }
-
-    applyToProcessEnvironment(env: { [key: string]: string | null }): void {
-        let lowerToActualVariableNames: { [lowerKey: string]: string | undefined } | undefined;
-        if (isWindows) {
-            lowerToActualVariableNames = {};
-            Object.keys(env).forEach(e => lowerToActualVariableNames![e.toLowerCase()] = e);
-        }
-        this.map.forEach((mutators, variable) => {
-            const actualVariable = isWindows ? lowerToActualVariableNames![variable.toLowerCase()] || variable : variable;
-            mutators.forEach(mutator => {
-                switch (mutator.type) {
-                    case EnvironmentVariableMutatorType.Append:
-                        env[actualVariable] = (env[actualVariable] || '') + mutator.value;
-                        break;
-                    case EnvironmentVariableMutatorType.Prepend:
-                        env[actualVariable] = mutator.value + (env[actualVariable] || '');
-                        break;
-                    case EnvironmentVariableMutatorType.Replace:
-                        env[actualVariable] = mutator.value;
-                        break;
-                }
-            });
-        });
+    protected postAttachAttempted(term: TaskTerminalProcess): void {
+        const toDispose = this.notifyClientOnExit(term);
+        this.terminalToDispose.set(term.id, toDispose);
     }
 }

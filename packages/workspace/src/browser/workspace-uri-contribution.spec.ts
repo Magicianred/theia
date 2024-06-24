@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { enableJSDOM } from '@theia/core/lib/browser/test/jsdom';
 const disableJSDOM = enableJSDOM();
@@ -20,7 +20,6 @@ const disableJSDOM = enableJSDOM();
 import { expect } from 'chai';
 import * as sinon from 'sinon';
 import { Container } from '@theia/core/shared/inversify';
-import { Signal } from '@theia/core/shared/@phosphor/signaling';
 import { Event } from '@theia/core/lib/common/event';
 import { ApplicationShell, WidgetManager } from '@theia/core/lib/browser';
 import { DefaultUriLabelProviderContribution } from '@theia/core/lib/browser/label-provider';
@@ -33,6 +32,7 @@ import { FileStat } from '@theia/filesystem/lib/common/files';
 import { EnvVariablesServer } from '@theia/core/lib/common/env-variables';
 import { MockEnvVariablesServerImpl } from '@theia/core/lib/browser/test/mock-env-variables-server';
 import { FileUri } from '@theia/core/lib/node';
+import { OS } from '@theia/core/lib/common/os';
 import * as temp from 'temp';
 
 after(() => disableJSDOM());
@@ -45,8 +45,8 @@ beforeEach(() => {
 
     container = new Container();
     container.bind(ApplicationShell).toConstantValue({
-        currentChanged: new Signal({}),
-        widgets: () => []
+        onDidChangeCurrentWidget: () => undefined,
+        widgets: []
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
     container.bind(WidgetManager).toConstantValue({
@@ -100,13 +100,13 @@ describe('WorkspaceUriLabelProviderContribution class', () => {
             expect(labelProvider.getIcon(FileStat.file('file:///home/test'))).eq(labelProvider.defaultFileIcon);
         });
 
-        it('should return folder icon from a folder URI', async () => {
+        it('should return folder icon from a folder FileStat', async () => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             stubs.push(sinon.stub(DefaultUriLabelProviderContribution.prototype, <any>'getFileIcon').returns(undefined));
             expect(labelProvider.getIcon(FileStat.dir('file:///home/test'))).eq(labelProvider.defaultFolderIcon);
         });
 
-        it('should return file icon from a file URI', async () => {
+        it('should return file icon from a file FileStat', async () => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             stubs.push(sinon.stub(DefaultUriLabelProviderContribution.prototype, <any>'getFileIcon').returns(undefined));
             expect(labelProvider.getIcon(FileStat.file('file:///home/test'))).eq(labelProvider.defaultFileIcon);
@@ -118,6 +118,11 @@ describe('WorkspaceUriLabelProviderContribution class', () => {
             stubs.push(sinon.stub(DefaultUriLabelProviderContribution.prototype, <any>'getFileIcon').returns(ret));
             expect(labelProvider.getIcon(new URI('file:///home/test'))).eq(ret);
             expect(labelProvider.getIcon(FileStat.file('file:///home/test'))).eq(ret);
+        });
+
+        it('should return the default folder icon for a URI or file stat that corresponds to a workspace root', () => {
+            expect(labelProvider.getIcon(new URI('file:///workspace'))).eq(labelProvider.defaultFolderIcon);
+            expect(labelProvider.getIcon(FileStat.dir('file:///workspace'))).eq(labelProvider.defaultFolderIcon);
         });
     });
 
@@ -151,20 +156,35 @@ describe('WorkspaceUriLabelProviderContribution class', () => {
         it('should return the absolute path of a file from the file\'s URI if the file is not in the workspace', () => {
             const file = new URI('file:///tmp/prout.txt');
             const longName = labelProvider.getLongName(file);
-            expect(longName).eq('/tmp/prout.txt');
+
+            if (OS.backend.isWindows) {
+                expect(longName).eq('\\tmp\\prout.txt');
+            } else {
+                expect(longName).eq('/tmp/prout.txt');
+            }
         });
 
         it('should return the absolute path of a file from the file\'s FileStat if the file is not in the workspace', () => {
             const file: FileStat = FileStat.file('file:///tmp/prout.txt');
             const longName = labelProvider.getLongName(file);
-            expect(longName).eq('/tmp/prout.txt');
+
+            if (OS.backend.isWindows) {
+                expect(longName).eq('\\tmp\\prout.txt');
+            } else {
+                expect(longName).eq('/tmp/prout.txt');
+            }
         });
 
         it('should return the path of a file if WorkspaceService returns no roots', () => {
             roots = [];
             const file = new URI('file:///tmp/prout.txt');
             const longName = labelProvider.getLongName(file);
-            expect(longName).eq('/tmp/prout.txt');
+
+            if (OS.backend.isWindows) {
+                expect(longName).eq('\\tmp\\prout.txt');
+            } else {
+                expect(longName).eq('/tmp/prout.txt');
+            }
         });
     });
 

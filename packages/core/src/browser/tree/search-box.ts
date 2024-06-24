@@ -1,23 +1,24 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { SearchBoxDebounce, SearchBoxDebounceOptions } from '../tree/search-box-debounce';
 import { BaseWidget, Message } from '../widgets/widget';
 import { Emitter, Event } from '../../common/event';
 import { KeyCode, Key } from '../keyboard/keys';
+import { nls } from '../../common/nls';
 
 /**
  * Initializer properties for the search box widget.
@@ -168,7 +169,7 @@ export class SearchBox extends BaseWidget {
         this.fireNext();
     }
 
-    onBeforeHide(): void {
+    override onBeforeHide(): void {
         this.removeClass(SearchBox.Styles.NO_MATCH);
         this.doFireFilterToggle(false);
         this.debounce.append(undefined);
@@ -253,7 +254,7 @@ export class SearchBox extends BaseWidget {
                 SearchBox.Styles.BUTTON,
                 ...SearchBox.Styles.FILTER,
             );
-            filter.title = 'Enable Filter on Type';
+            filter.title = nls.localizeByDefault('Filter on Type');
             buttons.appendChild(filter);
             filter.onclick = this.fireFilterToggle.bind(this);
         }
@@ -268,7 +269,7 @@ export class SearchBox extends BaseWidget {
                 SearchBox.Styles.BUTTON,
                 SearchBox.Styles.BUTTON_PREVIOUS
             );
-            previous.title = 'Previous (Up)';
+            previous.title = nls.localize('theia/core/searchbox/previous', 'Previous (Up)');
             buttons.appendChild(previous);
             previous.onclick = () => this.firePrevious.bind(this)();
 
@@ -277,7 +278,7 @@ export class SearchBox extends BaseWidget {
                 SearchBox.Styles.BUTTON,
                 SearchBox.Styles.BUTTON_NEXT
             );
-            next.title = 'Next (Down)';
+            next.title = nls.localize('theia/core/searchbox/next', 'Next (Down)');
             buttons.appendChild(next);
             next.onclick = () => this.fireNext.bind(this)();
         }
@@ -288,7 +289,7 @@ export class SearchBox extends BaseWidget {
                 SearchBox.Styles.BUTTON,
                 SearchBox.Styles.BUTTON_CLOSE
             );
-            close.title = 'Close (Escape)';
+            close.title = nls.localize('theia/core/searchbox/close', 'Close (Escape)');
             buttons.appendChild(close);
             close.onclick = () => this.hide.bind(this)();
         }
@@ -304,7 +305,7 @@ export class SearchBox extends BaseWidget {
 
     }
 
-    protected onAfterAttach(msg: Message): void {
+    protected override onAfterAttach(msg: Message): void {
         super.onAfterAttach(msg);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.addEventListener(this.input, 'selectstart' as any, () => false);

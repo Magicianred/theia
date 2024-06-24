@@ -1,29 +1,29 @@
-/********************************************************************************
- * Copyright (C) 2017-2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017-2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
-import * as nsfw from '@theia/core/shared/nsfw';
-import { join } from 'path';
+import nsfw = require('@theia/core/shared/nsfw');
+import path = require('path');
 import { promises as fsp } from 'fs';
 import { IMinimatch, Minimatch } from 'minimatch';
-import { FileUri } from '@theia/core/lib/node/file-uri';
+import { FileUri } from '@theia/core/lib/common/file-uri';
 import {
     FileChangeType, FileSystemWatcherService, FileSystemWatcherServiceClient, WatchOptions
 } from '../../common/filesystem-watcher-protocol';
 import { FileChangeCollection } from '../file-change-collection';
-import { Deferred } from '@theia/core/lib/common/promise-util';
+import { Deferred, timeout } from '@theia/core/lib/common/promise-util';
 
 export interface NsfwWatcherOptions {
     ignored: IMinimatch[]
@@ -73,7 +73,7 @@ export class NsfwWatcher {
     /**
      * When the ref count hits zero, we schedule this watch handle to be disposed.
      */
-    protected deferredDisposalTimer: NodeJS.Timer | undefined;
+    protected deferredDisposalTimer: NodeJS.Timeout | undefined;
 
     /**
      * This deferred only rejects with `WatcherDisposal` and never resolves.
@@ -197,21 +197,33 @@ export class NsfwWatcher {
     }
 
     /**
+     * @throws with {@link WatcherDisposal} if this instance is disposed.
+     */
+    protected assertNotDisposed(): void {
+        if (this.disposed) {
+            throw WatcherDisposal;
+        }
+    }
+
+    /**
      * When starting a watcher, we'll first check and wait for the path to exists
      * before running an NSFW watcher.
      */
     protected async start(): Promise<void> {
-        while (await this.orCancel(fsp.stat(this.fsPath).then(() => false, () => true))) {
-            await this.orCancel(new Promise(resolve => setTimeout(resolve, 500)));
+        while (await fsp.stat(this.fsPath).then(() => false, () => true)) {
+            await timeout(500);
+            this.assertNotDisposed();
         }
-        const watcher = await this.orCancel(this.createNsfw());
-        await this.orCancel(watcher.start().then(() => {
-            this.debug('STARTED', `disposed=${this.disposed}`);
-            // The watcher could be disposed while it was starting, make sure to check for this:
-            if (this.disposed) {
-                this.stopNsfw(watcher);
-            }
-        }));
+        this.assertNotDisposed();
+        const watcher = await this.createNsfw();
+        this.assertNotDisposed();
+        await watcher.start();
+        this.debug('STARTED', `disposed=${this.disposed}`);
+        // The watcher could be disposed while it was starting, make sure to check for this:
+        if (this.disposed) {
+            await this.stopNsfw(watcher);
+            throw WatcherDisposal;
+        }
         this.nsfw = watcher;
     }
 
@@ -252,19 +264,19 @@ export class NsfwWatcher {
                 await Promise.all(events.map(async event => {
                     if (event.action === nsfw.actions.RENAMED) {
                         const [oldPath, newPath] = await Promise.all([
-                            this.resolveEventPath(event.directory, event.oldFile!),
-                            this.resolveEventPath(event.newDirectory || event.directory, event.newFile!),
+                            this.resolveEventPath(event.directory, event.oldFile),
+                            this.resolveEventPath(event.newDirectory, event.newFile),
                         ]);
                         this.pushFileChange(fileChangeCollection, FileChangeType.DELETED, oldPath);
                         this.pushFileChange(fileChangeCollection, FileChangeType.ADDED, newPath);
                     } else {
-                        const path = await this.resolveEventPath(event.directory, event.file!);
+                        const filePath = await this.resolveEventPath(event.directory, event.file!);
                         if (event.action === nsfw.actions.CREATED) {
-                            this.pushFileChange(fileChangeCollection, FileChangeType.ADDED, path);
+                            this.pushFileChange(fileChangeCollection, FileChangeType.ADDED, filePath);
                         } else if (event.action === nsfw.actions.DELETED) {
-                            this.pushFileChange(fileChangeCollection, FileChangeType.DELETED, path);
+                            this.pushFileChange(fileChangeCollection, FileChangeType.DELETED, filePath);
                         } else if (event.action === nsfw.actions.MODIFIED) {
-                            this.pushFileChange(fileChangeCollection, FileChangeType.UPDATED, path);
+                            this.pushFileChange(fileChangeCollection, FileChangeType.UPDATED, filePath);
                         }
                     }
                 }));
@@ -281,23 +293,13 @@ export class NsfwWatcher {
     }
 
     protected async resolveEventPath(directory: string, file: string): Promise<string> {
-        const path = join(directory, file);
-        try {
-            return await fsp.realpath(path);
-        } catch {
-            try {
-                // file does not exist try to resolve directory
-                return join(await fsp.realpath(directory), file);
-            } catch {
-                // directory does not exist fall back to symlink
-                return path;
-            }
-        }
+        // nsfw already resolves symlinks, the paths should be clean already:
+        return path.resolve(directory, file);
     }
 
-    protected pushFileChange(changes: FileChangeCollection, type: FileChangeType, path: string): void {
-        if (!this.isIgnored(path)) {
-            const uri = FileUri.create(path).toString();
+    protected pushFileChange(changes: FileChangeCollection, type: FileChangeType, filePath: string): void {
+        if (!this.isIgnored(filePath)) {
+            const uri = FileUri.create(filePath).toString();
             changes.push({ type, uri });
         }
     }
@@ -307,13 +309,6 @@ export class NsfwWatcher {
             clients: this.getClientIds(),
             uri: this.fsPath,
         });
-    }
-
-    /**
-     * Wrap a promise to reject as soon as this handle gets disposed.
-     */
-    protected async orCancel<T>(promise: Promise<T>): Promise<T> {
-        return Promise.race<T>([this.deferredDisposalDeferred.promise, promise]);
     }
 
     /**
@@ -337,9 +332,9 @@ export class NsfwWatcher {
         }
     }
 
-    protected isIgnored(path: string): boolean {
+    protected isIgnored(filePath: string): boolean {
         return this.watcherOptions.ignored.length > 0
-            && this.watcherOptions.ignored.some(m => m.match(path));
+            && this.watcherOptions.ignored.some(m => m.match(filePath));
     }
 
     /**

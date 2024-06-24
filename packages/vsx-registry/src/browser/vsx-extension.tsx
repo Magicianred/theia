@@ -1,40 +1,44 @@
-/********************************************************************************
- * Copyright (C) 2020 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as React from '@theia/core/shared/react';
-import * as DOMPurify from 'dompurify';
-import { injectable, inject } from '@theia/core/shared/inversify';
+import * as DOMPurify from '@theia/core/shared/dompurify';
+import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
-import { TreeElement } from '@theia/core/lib/browser/source-tree';
+import { TreeElement, TreeElementNode } from '@theia/core/lib/browser/source-tree';
 import { OpenerService, open, OpenerOptions } from '@theia/core/lib/browser/opener-service';
 import { HostedPluginSupport } from '@theia/plugin-ext/lib/hosted/browser/hosted-plugin';
-import { PluginServer, DeployedPlugin, PluginType } from '@theia/plugin-ext/lib/common/plugin-protocol';
-import { VSXExtensionUri } from '../common/vsx-extension-uri';
+import { PluginServer, DeployedPlugin, PluginType, PluginIdentifiers, PluginDeployOptions } from '@theia/plugin-ext/lib/common/plugin-protocol';
+import { VSCodeExtensionUri } from '@theia/plugin-ext-vscode/lib/common/plugin-vscode-uri';
 import { ProgressService } from '@theia/core/lib/common/progress-service';
 import { Endpoint } from '@theia/core/lib/browser/endpoint';
 import { VSXEnvironment } from '../common/vsx-environment';
 import { VSXExtensionsSearchModel } from './vsx-extensions-search-model';
-import { VSXExtensionNamespaceAccess, VSXUser } from '../common/vsx-registry-types';
-import { MenuPath } from '@theia/core/lib/common';
-import { ContextMenuRenderer } from '@theia/core/lib/browser';
+import { CommandRegistry, MenuPath, nls } from '@theia/core/lib/common';
+import { codicon, ConfirmDialog, ContextMenuRenderer, HoverService, TreeWidget } from '@theia/core/lib/browser';
+import { VSXExtensionNamespaceAccess, VSXUser } from '@theia/ovsx-client/lib/ovsx-types';
+import { WindowService } from '@theia/core/lib/browser/window/window-service';
+import { MarkdownStringImpl } from '@theia/core/lib/common/markdown-rendering';
 
 export const EXTENSIONS_CONTEXT_MENU: MenuPath = ['extensions_context_menu'];
 
 export namespace VSXExtensionsContextMenu {
-    export const COPY = [...EXTENSIONS_CONTEXT_MENU, '1_copy'];
+    export const INSTALL = [...EXTENSIONS_CONTEXT_MENU, '1_install'];
+    export const COPY = [...EXTENSIONS_CONTEXT_MENU, '2_copy'];
+    export const CONTRIBUTION = [...EXTENSIONS_CONTEXT_MENU, '3_contribution'];
 }
 
 @injectable()
@@ -54,6 +58,7 @@ export class VSXExtensionData {
     readonly license?: string;
     readonly readme?: string;
     readonly preview?: boolean;
+    readonly verified?: boolean;
     readonly namespaceAccess?: VSXExtensionNamespaceAccess;
     readonly publishedBy?: VSXUser;
     static KEYS: Set<(keyof VSXExtensionData)> = new Set([
@@ -72,6 +77,7 @@ export class VSXExtensionData {
         'license',
         'readme',
         'preview',
+        'verified',
         'namespaceAccess',
         'publishedBy'
     ]);
@@ -87,6 +93,15 @@ export type VSXExtensionFactory = (options: VSXExtensionOptions) => VSXExtension
 
 @injectable()
 export class VSXExtension implements VSXExtensionData, TreeElement {
+    /**
+     * Ensure the version string begins with `'v'`.
+     */
+    static formatVersion(version: string | undefined): string | undefined {
+        if (version && !version.startsWith('v')) {
+            return `v${version}`;
+        }
+        return version;
+    }
 
     @inject(VSXExtensionOptions)
     protected readonly options: VSXExtensionOptions;
@@ -112,10 +127,26 @@ export class VSXExtension implements VSXExtensionData, TreeElement {
     @inject(VSXExtensionsSearchModel)
     readonly search: VSXExtensionsSearchModel;
 
+    @inject(HoverService)
+    protected readonly hoverService: HoverService;
+
+    @inject(WindowService)
+    readonly windowService: WindowService;
+
+    @inject(CommandRegistry)
+    readonly commandRegistry: CommandRegistry;
+
     protected readonly data: Partial<VSXExtensionData> = {};
 
+    protected registryUri: Promise<string>;
+
+    @postConstruct()
+    protected postConstruct(): void {
+        this.registryUri = this.environment.getRegistryUri();
+    }
+
     get uri(): URI {
-        return VSXExtensionUri.toUri(this.id);
+        return VSCodeExtensionUri.fromId(this.id);
     }
 
     get id(): string {
@@ -127,7 +158,7 @@ export class VSXExtension implements VSXExtensionData, TreeElement {
     }
 
     get plugin(): DeployedPlugin | undefined {
-        return this.pluginSupport.getPlugin(this.id);
+        return this.pluginSupport.getPlugin(this.id as PluginIdentifiers.UnversionedId);
     }
 
     get installed(): boolean {
@@ -135,9 +166,7 @@ export class VSXExtension implements VSXExtensionData, TreeElement {
     }
 
     get builtin(): boolean {
-        const plugin = this.plugin;
-        const type = plugin && plugin.type;
-        return type === PluginType.System;
+        return this.plugin?.type === PluginType.System;
     }
 
     update(data: Partial<VSXExtensionData>): void {
@@ -148,9 +177,12 @@ export class VSXExtension implements VSXExtensionData, TreeElement {
         }
     }
 
+    reloadWindow(): void {
+        this.windowService.reload();
+    }
+
     protected getData<K extends keyof VSXExtensionData>(key: K): VSXExtensionData[K] {
-        const plugin = this.plugin;
-        const model = plugin && plugin.metadata.model;
+        const model = this.plugin?.metadata.model;
         if (model && key in model) {
             return model[key as keyof typeof model] as VSXExtensionData[K];
         }
@@ -236,6 +268,10 @@ export class VSXExtension implements VSXExtensionData, TreeElement {
         return this.getData('preview');
     }
 
+    get verified(): boolean | undefined {
+        return this.getData('verified');
+    }
+
     get namespaceAccess(): VSXExtensionNamespaceAccess | undefined {
         return this.getData('namespaceAccess');
     }
@@ -244,27 +280,63 @@ export class VSXExtension implements VSXExtensionData, TreeElement {
         return this.getData('publishedBy');
     }
 
+    get tooltip(): string {
+        let md = `__${this.displayName}__ ${VSXExtension.formatVersion(this.version)}\n\n${this.description}\n_____\n\n${nls.localizeByDefault('Publisher: {0}', this.publisher)}`;
+
+        if (this.license) {
+            md += `  \r${nls.localize('theia/vsx-registry/license', 'License: {0}', this.license)}`;
+        }
+
+        if (this.downloadCount) {
+            md += `  \r${nls.localize('theia/vsx-registry/downloadCount', 'Download count: {0}', downloadCompactFormatter.format(this.downloadCount))}`;
+        }
+
+        if (this.averageRating) {
+            md += `  \r${getAverageRatingTitle(this.averageRating)}`;
+        }
+
+        return md;
+    }
+
     protected _busy = 0;
     get busy(): boolean {
         return !!this._busy;
     }
 
-    async install(): Promise<void> {
-        this._busy++;
-        try {
-            await this.progressService.withProgress(`"Installing '${this.id}' extension...`, 'extensions', () =>
-                this.pluginServer.deploy(this.uri.toString())
-            );
-        } finally {
-            this._busy--;
+    async install(options?: PluginDeployOptions): Promise<void> {
+        if (!this.verified) {
+            const choice = await new ConfirmDialog({
+                title: nls.localize('theia/vsx-registry/confirmDialogTitle', 'Are you sure you want to proceed with the installation ?'),
+                msg: nls.localize('theia/vsx-registry/confirmDialogMessage', 'The extension "{0}" is unverified and might pose a security risk.', this.displayName)
+            }).open();
+            if (choice) {
+                this.doInstall(options);
+            }
+        } else {
+            this.doInstall(options);
         }
     }
 
     async uninstall(): Promise<void> {
         this._busy++;
         try {
-            await this.progressService.withProgress(`Uninstalling '${this.id}' extension...`, 'extensions', () =>
-                this.pluginServer.undeploy(this.id)
+            const { plugin } = this;
+            if (plugin) {
+                await this.progressService.withProgress(
+                    nls.localizeByDefault('Uninstalling {0}...', this.id), 'extensions',
+                    () => this.pluginServer.uninstall(PluginIdentifiers.componentsToVersionedId(plugin.metadata.model))
+                );
+            }
+        } finally {
+            this._busy--;
+        }
+    }
+
+    protected async doInstall(options?: PluginDeployOptions): Promise<void> {
+        this._busy++;
+        try {
+            await this.progressService.withProgress(nls.localizeByDefault("Installing extension '{0}' v{1}...", this.id, this.version ?? 0), 'extensions', () =>
+                this.pluginServer.deploy(this.uri.toString(), undefined, options)
             );
         } finally {
             this._busy--;
@@ -289,8 +361,14 @@ export class VSXExtension implements VSXExtensionData, TreeElement {
      * @returns the registry link for the given extension at the path.
      */
     async getRegistryLink(path = ''): Promise<URI> {
-        const uri = await this.environment.getRegistryUri();
-        return uri.resolve('extension/' + this.id.replace('.', '/')).resolve(path);
+        const registryUri = new URI(await this.registryUri);
+        if (this.downloadUrl) {
+            const downloadUri = new URI(this.downloadUrl);
+            if (downloadUri.authority !== registryUri.authority) {
+                throw new Error('cannot generate a valid URL');
+            }
+        }
+        return registryUri.resolve('extension/' + this.id.replace('.', '/')).resolve(path);
     }
 
     async serialize(): Promise<string> {
@@ -315,14 +393,15 @@ export class VSXExtension implements VSXExtensionData, TreeElement {
         await open(this.openerService, uri, options);
     }
 
-    render(): React.ReactNode {
-        return <VSXExtensionComponent extension={this} />;
+    render(host: TreeWidget): React.ReactNode {
+        return <VSXExtensionComponent extension={this} host={host} hoverService={this.hoverService} />;
     }
 }
 
-export abstract class AbstractVSXExtensionComponent extends React.Component<AbstractVSXExtensionComponent.Props> {
+export abstract class AbstractVSXExtensionComponent<Props extends AbstractVSXExtensionComponent.Props = AbstractVSXExtensionComponent.Props> extends React.Component<Props> {
 
-    readonly install = async () => {
+    readonly install = async (event?: React.MouseEvent) => {
+        event?.stopPropagation();
         this.forceUpdate();
         try {
             const pending = this.props.extension.install();
@@ -333,7 +412,8 @@ export abstract class AbstractVSXExtensionComponent extends React.Component<Abst
         }
     };
 
-    readonly uninstall = async () => {
+    readonly uninstall = async (event?: React.MouseEvent) => {
+        event?.stopPropagation();
         try {
             const pending = this.props.extension.uninstall();
             this.forceUpdate();
@@ -343,27 +423,43 @@ export abstract class AbstractVSXExtensionComponent extends React.Component<Abst
         }
     };
 
+    readonly reloadWindow = (event?: React.MouseEvent) => {
+        event?.stopPropagation();
+        this.props.extension.reloadWindow();
+    };
+
     protected readonly manage = (e: React.MouseEvent<HTMLElement, MouseEvent>) => {
+        e.stopPropagation();
         this.props.extension.handleContextMenu(e);
     };
 
-    protected renderAction(): React.ReactNode {
-        const extension = this.props.extension;
-        const { builtin, busy, installed } = extension;
+    protected renderAction(host?: TreeWidget): React.ReactNode {
+        const { builtin, busy, plugin } = this.props.extension;
+        const isFocused = (host?.model.getFocusedNode() as TreeElementNode)?.element === this.props.extension;
+        const tabIndex = (!host || isFocused) ? 0 : undefined;
+        const installed = !!plugin;
+        const outOfSynch = plugin?.metadata.outOfSync;
         if (builtin) {
-            return <div className="codicon codicon-settings-gear action" onClick={this.manage}></div>;
+            return <div className="codicon codicon-settings-gear action" tabIndex={tabIndex} onClick={this.manage}></div>;
         }
         if (busy) {
             if (installed) {
-                return <button className="theia-button action theia-mod-disabled">Uninstalling</button>;
+                return <button className="theia-button action theia-mod-disabled">{nls.localizeByDefault('Uninstalling')}</button>;
             }
-            return <button className="theia-button action prominent theia-mod-disabled">Installing</button>;
+            return <button className="theia-button action prominent theia-mod-disabled">{nls.localizeByDefault('Installing')}</button>;
         }
         if (installed) {
-            return <div><button className="theia-button action" onClick={this.uninstall}>Uninstall</button>
-                <div className="codicon codicon-settings-gear action" onClick={this.manage}></div></div>;
+            return <div>
+                {
+                    outOfSynch
+                        ? <button className="theia-button action" onClick={this.reloadWindow}>{nls.localizeByDefault('Reload Window')}</button>
+                        : <button className="theia-button action" onClick={this.uninstall}>{nls.localizeByDefault('Uninstall')}</button>
+                }
+
+                <div className="codicon codicon-settings-gear action" onClick={this.manage}></div>
+            </div>;
         }
-        return <button className="theia-button prominent action" onClick={this.install}>Install</button>;
+        return <button className="theia-button prominent action" onClick={this.install}>{nls.localizeByDefault('Install')}</button>;
     }
 
 }
@@ -375,29 +471,63 @@ export namespace AbstractVSXExtensionComponent {
 
 const downloadFormatter = new Intl.NumberFormat();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const downloadCompactFormatter = new Intl.NumberFormat(undefined, { notation: 'compact', compactDisplay: 'short' } as any);
+const downloadCompactFormatter = new Intl.NumberFormat('en-US', { notation: 'compact', compactDisplay: 'short' } as any);
+const averageRatingFormatter = (averageRating: number): number => Math.round(averageRating * 2) / 2;
+const getAverageRatingTitle = (averageRating: number): string =>
+    nls.localizeByDefault('Average rating: {0} out of 5', averageRatingFormatter(averageRating));
 
-export class VSXExtensionComponent extends AbstractVSXExtensionComponent {
-    render(): React.ReactNode {
-        const { iconUrl, publisher, displayName, description, version, downloadCount, averageRating } = this.props.extension;
-        return <div className='theia-vsx-extension'>
+export namespace VSXExtensionComponent {
+    export interface Props extends AbstractVSXExtensionComponent.Props {
+        host: TreeWidget;
+        hoverService: HoverService;
+    }
+}
+
+export class VSXExtensionComponent<Props extends VSXExtensionComponent.Props = VSXExtensionComponent.Props> extends AbstractVSXExtensionComponent<Props> {
+    override render(): React.ReactNode {
+        const { iconUrl, publisher, displayName, description, version, downloadCount, averageRating, tooltip, verified } = this.props.extension;
+
+        return <div
+            className='theia-vsx-extension noselect'
+            onMouseEnter={event => {
+                this.props.hoverService.requestHover({
+                    content: new MarkdownStringImpl(tooltip),
+                    target: event.currentTarget,
+                    position: 'right'
+                });
+            }}
+            onMouseUp={event => {
+                if (event.button === 2) {
+                    this.manage(event);
+                }
+            }}
+        >
             {iconUrl ?
                 <img className='theia-vsx-extension-icon' src={iconUrl} /> :
                 <div className='theia-vsx-extension-icon placeholder' />}
             <div className='theia-vsx-extension-content'>
                 <div className='title'>
                     <div className='noWrapInfo'>
-                        <span className='name'>{displayName}</span> <span className='version'>{version}</span>
+                        <span className='name'>{displayName}</span> <span className='version'>{VSXExtension.formatVersion(version)}</span>
                     </div>
                     <div className='stat'>
-                        {!!downloadCount && <span className='download-count'><i className='fa fa-download' />{downloadCompactFormatter.format(downloadCount)}</span>}
-                        {!!averageRating && <span className='average-rating'><i className='fa fa-star' />{averageRating.toFixed(1)}</span>}
+                        {!!downloadCount && <span className='download-count'><i className={codicon('cloud-download')} />{downloadCompactFormatter.format(downloadCount)}</span>}
+                        {!!averageRating && <span className='average-rating'><i className={codicon('star-full')} />{averageRatingFormatter(averageRating)}</span>}
                     </div>
                 </div>
                 <div className='noWrapInfo theia-vsx-extension-description'>{description}</div>
                 <div className='theia-vsx-extension-action-bar'>
-                    <span className='noWrapInfo theia-vsx-extension-publisher'>{publisher}</span>
-                    {this.renderAction()}
+                    <div className='theia-vsx-extension-publisher-container'>
+                        {verified === true ? (
+                            <i className={codicon('verified-filled')} />
+                        ) : verified === false ? (
+                            <i className={codicon('verified')} />
+                        ) : (
+                            <i className={codicon('question')} />
+                        )}
+                        <span className='noWrapInfo theia-vsx-extension-publisher'>{publisher}</span>
+                    </div>
+                    {this.renderAction(this.props.host)}
                 </div>
             </div>
         </div >;
@@ -413,17 +543,16 @@ export class VSXExtensionEditorComponent extends AbstractVSXExtensionComponent {
         return this._scrollContainer;
     }
 
-    render(): React.ReactNode {
+    override render(): React.ReactNode {
         const {
             builtin, preview, id, iconUrl, publisher, displayName, description, version,
             averageRating, downloadCount, repository, license, readme
         } = this.props.extension;
 
-        const { baseStyle, scrollStyle } = this.getSubcomponentStyles();
         const sanitizedReadme = !!readme ? DOMPurify.sanitize(readme) : undefined;
 
         return <React.Fragment>
-            <div className='header' style={baseStyle} ref={ref => this.header = (ref || undefined)}>
+            <div className='header' ref={ref => this.header = (ref || undefined)}>
                 {iconUrl ?
                     <img className='icon-container' src={iconUrl} /> :
                     <div className='icon-container placeholder' />}
@@ -440,11 +569,14 @@ export class VSXExtensionEditorComponent extends AbstractVSXExtensionComponent {
                             {publisher}
                         </span>
                         {!!downloadCount && <span className='download-count' onClick={this.openExtension}>
-                            <i className="fa fa-download" />{downloadFormatter.format(downloadCount)}</span>}
-                        {averageRating !== undefined && <span className='average-rating' onClick={this.openAverageRating}>{this.renderStars()}</span>}
+                            <i className={codicon('cloud-download')} />{downloadFormatter.format(downloadCount)}</span>}
+                        {
+                            averageRating !== undefined &&
+                            <span className='average-rating' title={getAverageRatingTitle(averageRating)} onClick={this.openAverageRating}>{this.renderStars()}</span>
+                        }
                         {repository && <span className='repository' onClick={this.openRepository}>Repository</span>}
                         {license && <span className='license' onClick={this.openLicense}>{license}</span>}
-                        {version && <span className='version'>{version}</span>}
+                        {version && <span className='version'>{VSXExtension.formatVersion(version)}</span>}
                     </div>
                     <div className='description noWrapInfo'>{description}</div>
                     {this.renderAction()}
@@ -452,13 +584,11 @@ export class VSXExtensionEditorComponent extends AbstractVSXExtensionComponent {
             </div>
             {
                 sanitizedReadme &&
-                < div className='scroll-container'
-                    style={scrollStyle}
+                <div className='scroll-container'
                     ref={ref => this._scrollContainer = (ref || undefined)}>
                     <div className='body'
                         ref={ref => this.body = (ref || undefined)}
                         onClick={this.openLink}
-                        style={baseStyle}
                         // eslint-disable-next-line react/no-danger
                         dangerouslySetInnerHTML={{ __html: sanitizedReadme }}
                     />
@@ -481,28 +611,20 @@ export class VSXExtensionEditorComponent extends AbstractVSXExtensionComponent {
             icon = 'shield';
             tooltip = `Only verified owners can publish to "${publisher}" namespace.` + tooltip;
         }
-        return <i className={`fa fa-${icon} namespace-access`} title={tooltip} onClick={this.openPublishedBy} />;
+        return <i className={`${codicon(icon)} namespace-access`} title={tooltip} onClick={this.openPublishedBy} />;
     }
 
     protected renderStars(): React.ReactNode {
         const rating = this.props.extension.averageRating || 0;
 
         const renderStarAt = (position: number) => position <= rating ?
-            <i className='fa fa-star' /> :
+            <i className={codicon('star-full')} /> :
             position > rating && position - rating < 1 ?
-                <i className='fa fa-star-half-o' /> :
-                <i className='fa fa-star-o' />;
+                <i className={codicon('star-half')} /> :
+                <i className={codicon('star-empty')} />;
         return <React.Fragment>
             {renderStarAt(1)}{renderStarAt(2)}{renderStarAt(3)}{renderStarAt(4)}{renderStarAt(5)}
         </React.Fragment>;
-    }
-
-    protected getSubcomponentStyles(): { baseStyle: React.CSSProperties, scrollStyle: React.CSSProperties; } {
-        const visibility: 'unset' | 'hidden' = this.header ? 'unset' : 'hidden';
-        const baseStyle = { visibility };
-        const scrollStyle = this.header?.clientHeight ? { visibility, height: `calc(100% - (${this.header.clientHeight}px + 1px))` } : baseStyle;
-
-        return { baseStyle, scrollStyle };
     }
 
     // TODO replace with webview

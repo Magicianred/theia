@@ -1,38 +1,67 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
+import * as dns from 'dns';
 import * as path from 'path';
 import * as http from 'http';
 import * as https from 'https';
 import * as express from 'express';
 import * as yargs from 'yargs';
 import * as fs from 'fs-extra';
-import { performance, PerformanceObserver } from 'perf_hooks';
 import { inject, named, injectable, postConstruct } from 'inversify';
-import { ContributionProvider, MaybePromise } from '../common';
+import { ContributionProvider, MaybePromise, Stopwatch } from '../common';
 import { CliContribution } from './cli';
 import { Deferred } from '../common/promise-util';
 import { environment } from '../common/index';
 import { AddressInfo } from 'net';
-import { ApplicationPackage } from '@theia/application-package';
-
-export const BackendApplicationContribution = Symbol('BackendApplicationContribution');
+import { ProcessUtils } from './process-utils';
 
 /**
- * Contribution for hooking into the backend lifecycle.
+ * The path to the application project directory. This is the directory where the application code is located.
+ * Mostly contains the `package.json` file and the `lib` directory.
+ */
+export const BackendApplicationPath = process.env.THEIA_APP_PROJECT_PATH || process.cwd();
+
+export type DnsResultOrder = 'ipv4first' | 'verbatim' | 'nodeDefault';
+
+const APP_PROJECT_PATH = 'app-project-path';
+
+const TIMER_WARNING_THRESHOLD = 50;
+
+const DEFAULT_PORT = environment.electron.is() ? 0 : 3000;
+const DEFAULT_HOST = 'localhost';
+const DEFAULT_SSL = false;
+const DEFAULT_DNS_DEFAULT_RESULT_ORDER: DnsResultOrder = 'ipv4first';
+
+export const BackendApplicationServer = Symbol('BackendApplicationServer');
+/**
+ * This service is responsible for serving the frontend files.
+ *
+ * When not bound, `@theia/cli` generators will bind it on the fly to serve files according to its own layout.
+ */
+export interface BackendApplicationServer extends BackendApplicationContribution { }
+
+export const BackendApplicationContribution = Symbol('BackendApplicationContribution');
+/**
+ * Contribution for hooking into the backend lifecycle:
+ *
+ * - `initialize()`
+ * - `configure(expressApp)`
+ * - `onStart(httpServer)`
+ * - `onStop()`
  */
 export interface BackendApplicationContribution {
     /**
@@ -82,31 +111,31 @@ export interface BackendApplicationContribution {
     onStop?(app?: express.Application): void;
 }
 
-const defaultPort = environment.electron.is() ? 0 : 3000;
-const defaultHost = 'localhost';
-const defaultSSL = false;
-
-const appProjectPath = 'app-project-path';
-
-const TIMER_WARNING_THRESHOLD = 50;
-
 @injectable()
 export class BackendApplicationCliContribution implements CliContribution {
 
     port: number;
     hostname: string | undefined;
+    dnsDefaultResultOrder: DnsResultOrder = DEFAULT_DNS_DEFAULT_RESULT_ORDER;
     ssl: boolean | undefined;
     cert: string | undefined;
     certkey: string | undefined;
-    projectPath: string;
+    /** @deprecated Use the `BackendApplicationPath` constant or `process.env.THEIA_APP_PROJECT_PATH` environment variable instead */
+    projectPath = BackendApplicationPath;
 
     configure(conf: yargs.Argv): void {
-        conf.option('port', { alias: 'p', description: 'The port the backend server listens on.', type: 'number', default: defaultPort });
-        conf.option('hostname', { alias: 'h', description: 'The allowed hostname for connections.', type: 'string', default: defaultHost });
-        conf.option('ssl', { description: 'Use SSL (HTTPS), cert and certkey must also be set', type: 'boolean', default: defaultSSL });
+        conf.option('port', { alias: 'p', description: 'The port the backend server listens on.', type: 'number', default: DEFAULT_PORT });
+        conf.option('hostname', { alias: 'h', description: 'The allowed hostname for connections.', type: 'string', default: DEFAULT_HOST });
+        conf.option('ssl', { description: 'Use SSL (HTTPS), cert and certkey must also be set', type: 'boolean', default: DEFAULT_SSL });
         conf.option('cert', { description: 'Path to SSL certificate.', type: 'string' });
         conf.option('certkey', { description: 'Path to SSL certificate key.', type: 'string' });
-        conf.option(appProjectPath, { description: 'Sets the application project directory', default: this.appProjectPath() });
+        conf.option(APP_PROJECT_PATH, { description: 'Sets the application project directory', deprecated: true });
+        conf.option('dnsDefaultResultOrder', {
+            type: 'string',
+            description: 'Configure Node\'s DNS resolver default behavior, see https://nodejs.org/docs/latest-v18.x/api/dns.html#dnssetdefaultresultorderorder',
+            choices: ['ipv4first', 'verbatim', 'nodeDefault'],
+            default: DEFAULT_DNS_DEFAULT_RESULT_ORDER
+        });
     }
 
     setArguments(args: yargs.Arguments): void {
@@ -115,19 +144,8 @@ export class BackendApplicationCliContribution implements CliContribution {
         this.ssl = args.ssl as boolean;
         this.cert = args.cert as string;
         this.certkey = args.certkey as string;
-        this.projectPath = args[appProjectPath] as string;
+        this.dnsDefaultResultOrder = args.dnsDefaultResultOrder as DnsResultOrder;
     }
-
-    protected appProjectPath(): string {
-        if (environment.electron.is()) {
-            if (process.env.THEIA_APP_PROJECT_PATH) {
-                return process.env.THEIA_APP_PROJECT_PATH;
-            }
-            throw new Error('The \'THEIA_APP_PROJECT_PATH\' environment variable must be set when running in electron.');
-        }
-        return process.cwd();
-    }
-
 }
 
 /**
@@ -138,23 +156,20 @@ export class BackendApplication {
 
     protected readonly app: express.Application = express();
 
-    @inject(ApplicationPackage)
-    protected readonly applicationPackage: ApplicationPackage;
+    @inject(ProcessUtils)
+    protected readonly processUtils: ProcessUtils;
 
-    private readonly _performanceObserver: PerformanceObserver;
+    @inject(Stopwatch)
+    protected readonly stopwatch: Stopwatch;
+
+    private _configured: Promise<void>;
 
     constructor(
         @inject(ContributionProvider) @named(BackendApplicationContribution)
         protected readonly contributionsProvider: ContributionProvider<BackendApplicationContribution>,
-        @inject(BackendApplicationCliContribution) protected readonly cliParams: BackendApplicationCliContribution
-    ) {
+        @inject(BackendApplicationCliContribution) protected readonly cliParams: BackendApplicationCliContribution) {
         process.on('uncaughtException', error => {
-            if (error) {
-                console.error('Uncaught Exception: ', error.toString());
-                if (error.stack) {
-                    console.error(error.stack);
-                }
-            }
+            this.handleUncaughtError(error);
         });
 
         // Workaround for Electron not installing a handler to ignore SIGPIPE error
@@ -162,34 +177,22 @@ export class BackendApplication {
         process.on('SIGPIPE', () => {
             console.error(new Error('Unexpected SIGPIPE'));
         });
-
+        /**
+         * Kill the current process tree on exit.
+         */
+        function signalHandler(signal: NodeJS.Signals): never {
+            process.exit(1);
+        }
         // Handles normal process termination.
         process.on('exit', () => this.onStop());
         // Handles `Ctrl+C`.
-        process.on('SIGINT', () => process.exit(0));
+        process.on('SIGINT', signalHandler);
         // Handles `kill pid`.
-        process.on('SIGTERM', () => process.exit(0));
-
-        // Create performance observer
-        this._performanceObserver = new PerformanceObserver(list => {
-            for (const item of list.getEntries()) {
-                const contribution = `Backend ${item.name}`;
-                if (item.duration > TIMER_WARNING_THRESHOLD) {
-                    console.warn(`${contribution} is slow, took: ${item.duration.toFixed(1)} ms`);
-                } else {
-                    console.debug(`${contribution} took: ${item.duration.toFixed(1)} ms`);
-                }
-            }
-        });
-        this._performanceObserver.observe({
-            entryTypes: ['measure']
-        });
-
-        this.initialize();
+        process.on('SIGTERM', signalHandler);
     }
 
     protected async initialize(): Promise<void> {
-        for (const contribution of this.contributionsProvider.getContributions()) {
+        await Promise.all(this.contributionsProvider.getContributions().map(async contribution => {
             if (contribution.initialize) {
                 try {
                     await this.measure(contribution.constructor.name + '.initialize',
@@ -199,11 +202,21 @@ export class BackendApplication {
                     console.error('Could not initialize contribution', error);
                 }
             }
-        }
+        }));
+    }
+
+    get configured(): Promise<void> {
+        return this._configured;
     }
 
     @postConstruct()
+    protected init(): void {
+        this._configured = this.configure();
+    }
+
     protected async configure(): Promise<void> {
+        await this.initialize();
+
         this.app.get('*.js', this.serveGzipped.bind(this, 'text/javascript'));
         this.app.get('*.js.map', this.serveGzipped.bind(this, 'application/json'));
         this.app.get('*.css', this.serveGzipped.bind(this, 'text/css'));
@@ -211,27 +224,34 @@ export class BackendApplication {
         this.app.get('*.gif', this.serveGzipped.bind(this, 'image/gif'));
         this.app.get('*.png', this.serveGzipped.bind(this, 'image/png'));
         this.app.get('*.svg', this.serveGzipped.bind(this, 'image/svg+xml'));
+        this.app.get('*.eot', this.serveGzipped.bind(this, 'application/vnd.ms-fontobject'));
+        this.app.get('*.ttf', this.serveGzipped.bind(this, 'font/ttf'));
+        this.app.get('*.woff', this.serveGzipped.bind(this, 'font/woff'));
+        this.app.get('*.woff2', this.serveGzipped.bind(this, 'font/woff2'));
 
-        for (const contribution of this.contributionsProvider.getContributions()) {
+        await Promise.all(this.contributionsProvider.getContributions().map(async contribution => {
             if (contribution.configure) {
                 try {
-                    await this.measure(contribution.constructor.name + '.configure',
-                        () => contribution.configure!(this.app)
-                    );
+                    await contribution.configure!(this.app);
                 } catch (error) {
                     console.error('Could not configure contribution', error);
                 }
             }
-        }
+        }));
+        console.info('configured all backend app contributions');
     }
 
     use(...handlers: express.Handler[]): void {
         this.app.use(...handlers);
     }
 
-    async start(aPort?: number, aHostname?: string): Promise<http.Server | https.Server> {
-        const hostname = aHostname !== undefined ? aHostname : this.cliParams.hostname;
-        const port = aPort !== undefined ? aPort : this.cliParams.port;
+    async start(port?: number, hostname?: string): Promise<http.Server | https.Server> {
+        hostname ??= this.cliParams.hostname;
+        port ??= this.cliParams.port;
+
+        if (this.cliParams.dnsDefaultResultOrder !== 'nodeDefault') {
+            dns.setDefaultResultOrder(this.cliParams.dnsDefaultResultOrder);
+        }
 
         const deferred = new Deferred<http.Server | https.Server>();
         let server: http.Server | https.Server;
@@ -274,8 +294,10 @@ export class BackendApplication {
         });
 
         server.listen(port, hostname, () => {
-            const scheme = this.cliParams.ssl ? 'https' : 'http';
-            console.info(`Theia app listening on ${scheme}://${hostname || 'localhost'}:${(server.address() as AddressInfo).port}.`);
+            // address should be defined at this point
+            const address = server.address()!;
+            const url = typeof address === 'string' ? address : this.getHttpUrl(address, this.cliParams.ssl);
+            console.info(`Theia app listening on ${url}.`);
             deferred.resolve(server);
         });
 
@@ -293,7 +315,14 @@ export class BackendApplication {
                 }
             }
         }
-        return deferred.promise;
+        return this.stopwatch.startAsync('server', 'Finished starting backend application', () => deferred.promise);
+    }
+
+    protected getHttpUrl({ address, port, family }: AddressInfo, ssl?: boolean): string {
+        const scheme = ssl ? 'https' : 'http';
+        return family.toLowerCase() === 'ipv6'
+            ? `${scheme}://[${address}]:${port}`
+            : `${scheme}://${address}:${port}`;
     }
 
     protected onStop(): void {
@@ -308,14 +337,14 @@ export class BackendApplication {
             }
         }
         console.info('<<< All backend contributions have been stopped.');
-        this._performanceObserver.disconnect();
+        this.processUtils.terminateProcessTree(process.pid);
     }
 
     protected async serveGzipped(contentType: string, req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> {
         const acceptedEncodings = req.acceptsEncodings();
 
         const gzUrl = `${req.url}.gz`;
-        const gzPath = path.join(this.applicationPackage.projectPath, 'lib', gzUrl);
+        const gzPath = path.join(BackendApplicationPath, 'lib', 'frontend', gzUrl);
         if (acceptedEncodings.indexOf('gzip') === -1 || !(await fs.pathExists(gzPath))) {
             next();
             return;
@@ -330,15 +359,16 @@ export class BackendApplication {
     }
 
     protected async measure<T>(name: string, fn: () => MaybePromise<T>): Promise<T> {
-        const startMark = name + '-start';
-        const endMark = name + '-end';
-        performance.mark(startMark);
-        const result = await fn();
-        performance.mark(endMark);
-        performance.measure(name, startMark, endMark);
-        // Observer should immediately log the measurement, so we can clear it
-        performance.clearMarks(name);
-        return result;
+        return this.stopwatch.startAsync(name, `Backend ${name}`, fn, { thresholdMillis: TIMER_WARNING_THRESHOLD });
+    }
+
+    protected handleUncaughtError(error: Error): void {
+        if (error) {
+            console.error('Uncaught Exception: ', error.toString());
+            if (error.stack) {
+                console.error(error.stack);
+            }
+        }
     }
 
 }

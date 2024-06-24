@@ -1,18 +1,21 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
+
+import { isObject } from './types';
+
 /**
  * A Keybinding binds a specific key sequence ({@link Keybinding#keybinding}) to trigger a command ({@link Keybinding#command}). A Keybinding optionally may
  * define a "when clause" ({@link Keybinding#when}) to specify in which context it becomes active.
@@ -75,14 +78,18 @@ export namespace Keybinding {
      *
      * @param binding the binding to create an API object for.
      */
-    export function apiObjectify(binding: Keybinding): Keybinding {
+    export function apiObjectify(binding: Keybinding | RawKeybinding): Keybinding {
         return {
             command: binding.command,
-            keybinding: binding.keybinding,
+            keybinding: retrieveKeybinding(binding),
             context: binding.context,
             when: binding.when,
             args: binding.args
         };
+    }
+
+    export function retrieveKeybinding(binding: Partial<Keybinding & RawKeybinding>): string {
+        return binding.keybinding ?? binding.key ?? '';
     }
 
     /**
@@ -97,8 +104,49 @@ export namespace Keybinding {
     }
 
     /* Determine whether object is a KeyBinding */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    export function is(arg: Keybinding | any): arg is Keybinding {
-        return !!arg && arg === Object(arg) && 'command' in arg && 'keybinding' in arg;
+    export function is(arg: unknown): arg is Keybinding {
+        return isObject(arg) && 'command' in arg && 'keybinding' in arg;
+    }
+
+    export function replaceKeybinding(keybindings: Keybinding[], oldKeybinding: Keybinding, newKeybinding: Keybinding): boolean {
+        const indexOld = keybindings.findIndex(keybinding => Keybinding.equals(keybinding, oldKeybinding, false, true));
+        if (indexOld >= 0) {
+            const indexNew = keybindings.findIndex(keybinding => Keybinding.equals(keybinding, newKeybinding, false, true));
+            if (indexNew >= 0 && indexNew !== indexOld) {
+                // if keybindings already contain the new keybinding, remove the old keybinding and update the new one
+                keybindings.splice(indexOld, 1);
+                keybindings[indexNew] = newKeybinding;
+            } else {
+                keybindings[indexOld] = newKeybinding;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    export function addKeybinding(keybindings: Keybinding[], newKeybinding: Keybinding): void {
+        const index = keybindings.findIndex(keybinding => Keybinding.equals(keybinding, newKeybinding, false, true));
+        if (index >= 0) {
+            // if keybindings already contain the new keybinding, update it
+            keybindings[index] = newKeybinding;
+        } else {
+            keybindings.push(newKeybinding);
+        }
+    }
+}
+
+/**
+ * @internal
+ *
+ * Optional representation of key sequence as found in `keymaps.json` file.
+ * Use `keybinding` as the official representation.
+ */
+export interface RawKeybinding extends Omit<Keybinding, 'keybinding'> {
+    key: string;
+}
+
+export namespace RawKeybinding {
+    export function is(candidate: unknown): candidate is RawKeybinding {
+        return isObject(candidate) && 'command' in candidate && 'key' in candidate;
     }
 }

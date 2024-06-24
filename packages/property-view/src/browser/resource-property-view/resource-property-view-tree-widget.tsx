@@ -1,22 +1,21 @@
-/********************************************************************************
- * Copyright (C) 2020 EclipseSource and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 EclipseSource and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import {
     ContextMenuRenderer,
-    LabelProvider,
     NodeProps,
     TreeModel,
     TreeNode,
@@ -34,7 +33,13 @@ import {
     ResourcePropertiesRoot,
     ROOT_ID
 } from './resource-property-view-tree-items';
+import { nls } from '@theia/core/lib/common/nls';
 
+/**
+ * This widget fetches the property data for {@link FileSelection}s and selections of {@link Navigatable}s
+ * and renders that property data as a {@link TreeWidget}.
+ * This widget is provided by the registered `ResourcePropertyViewWidgetProvider`.
+ */
 @injectable()
 export class ResourcePropertyViewTreeWidget extends TreeWidget implements PropertyViewContentWidget {
 
@@ -44,12 +49,10 @@ export class ResourcePropertyViewTreeWidget extends TreeWidget implements Proper
     protected propertiesTree: Map<string, ResourcePropertiesCategoryNode>;
     protected currentSelection: Object | undefined;
 
-    @inject(LabelProvider) protected readonly labelProvider: LabelProvider;
-
     constructor(
-        @inject(TreeProps) readonly props: TreeProps,
+        @inject(TreeProps) props: TreeProps,
         @inject(TreeModel) model: TreeModel,
-        @inject(ContextMenuRenderer) protected readonly contextMenuRenderer: ContextMenuRenderer
+        @inject(ContextMenuRenderer) contextMenuRenderer: ContextMenuRenderer
     ) {
         super(props, model, contextMenuRenderer);
 
@@ -65,7 +68,7 @@ export class ResourcePropertyViewTreeWidget extends TreeWidget implements Proper
     }
 
     @postConstruct()
-    protected init(): void {
+    protected override init(): void {
         super.init();
 
         this.id = ResourcePropertyViewTreeWidget.ID + '-treeContainer';
@@ -92,24 +95,28 @@ export class ResourcePropertyViewTreeWidget extends TreeWidget implements Proper
     protected fillPropertiesTree(fileStatObject?: FileStat): void {
         if (fileStatObject) {
             this.propertiesTree.clear();
-            const infoNode = this.createCategoryNode('info', 'Info');
+            const infoNode = this.createCategoryNode('info', nls.localizeByDefault('Info'));
             this.propertiesTree.set('info', infoNode);
 
-            infoNode.children.push(this.createResultLineNode('isDirectory', 'Directory', fileStatObject.isDirectory, infoNode));
-            infoNode.children.push(this.createResultLineNode('isFile', 'File', fileStatObject.isFile, infoNode));
-            infoNode.children.push(this.createResultLineNode('isSymbolicLink', 'Symbolic link', fileStatObject.isSymbolicLink, infoNode));
-            infoNode.children.push(this.createResultLineNode('location', 'Location', this.getLocationString(fileStatObject), infoNode));
-            infoNode.children.push(this.createResultLineNode('name', 'Name', this.getFileName(fileStatObject), infoNode));
-            infoNode.children.push(this.createResultLineNode('path', 'Path', this.getFilePath(fileStatObject), infoNode));
-            infoNode.children.push(this.createResultLineNode('lastModification', 'Last modified', this.getLastModificationString(fileStatObject), infoNode));
-            infoNode.children.push(this.createResultLineNode('created', 'Created', this.getCreationTimeString(fileStatObject), infoNode));
-            infoNode.children.push(this.createResultLineNode('size', 'Size', this.getSizeString(fileStatObject), infoNode));
+            infoNode.children.push(this.createResultLineNode('isDirectory', nls.localize('theia/property-view/directory', 'Directory'), fileStatObject.isDirectory, infoNode));
+            infoNode.children.push(this.createResultLineNode('isFile', nls.localizeByDefault('File'), fileStatObject.isFile, infoNode));
+            infoNode.children.push(this.createResultLineNode('isSymbolicLink', nls.localize('theia/property-view/symbolicLink', 'Symbolic link'),
+                fileStatObject.isSymbolicLink, infoNode));
+            infoNode.children.push(this.createResultLineNode('location', nls.localize('theia/property-view/location', 'Location'),
+                this.getLocationString(fileStatObject), infoNode));
+            infoNode.children.push(this.createResultLineNode('name', nls.localizeByDefault('Name'), this.getFileName(fileStatObject), infoNode));
+            infoNode.children.push(this.createResultLineNode('path', nls.localizeByDefault('Path'), this.getFilePath(fileStatObject), infoNode));
+            infoNode.children.push(this.createResultLineNode('lastModification', nls.localize('theia/property-view/lastModified', 'Last modified'),
+                this.getLastModificationString(fileStatObject), infoNode));
+            infoNode.children.push(this.createResultLineNode('created', nls.localize('theia/property-view/created', 'Created'),
+                this.getCreationTimeString(fileStatObject), infoNode));
+            infoNode.children.push(this.createResultLineNode('size', nls.localize('theia/property-view/size', 'Size'), this.getSizeString(fileStatObject), infoNode));
             this.refreshModelChildren();
         }
     }
 
     protected getLocationString(fileStat: FileStat): string {
-        return fileStat.resource.path.toString();
+        return fileStat.resource.path.fsPath();
     }
 
     protected getFileName(fileStat: FileStat): string {
@@ -129,7 +136,7 @@ export class ResourcePropertyViewTreeWidget extends TreeWidget implements Proper
     }
 
     protected getSizeString(fileStat: FileStat): string {
-        return fileStat.size ? fileStat.size + ' bytes' : '';
+        return fileStat.size ? nls.localizeByDefault('{0}B', fileStat.size.toString()) : '';
     }
 
     /*
@@ -169,7 +176,7 @@ export class ResourcePropertyViewTreeWidget extends TreeWidget implements Proper
         }
     }
 
-    protected renderCaption(node: TreeNode, props: NodeProps): React.ReactNode {
+    protected override renderCaption(node: TreeNode, props: NodeProps): React.ReactNode {
         if (ResourcePropertiesCategoryNode.is(node)) {
             return this.renderExpandableNode(node);
         } else if (ResourcePropertiesItemNode.is(node)) {
@@ -193,7 +200,7 @@ export class ResourcePropertyViewTreeWidget extends TreeWidget implements Proper
         </React.Fragment>;
     }
 
-    protected createNodeAttributes(node: TreeNode, props: NodeProps): React.Attributes & React.HTMLAttributes<HTMLElement> {
+    protected override createNodeAttributes(node: TreeNode, props: NodeProps): React.Attributes & React.HTMLAttributes<HTMLElement> {
         return {
             ...super.createNodeAttributes(node, props),
             title: this.getNodeTooltip(node)

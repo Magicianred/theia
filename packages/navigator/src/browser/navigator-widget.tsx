@@ -1,58 +1,49 @@
-/********************************************************************************
- * Copyright (C) 2017 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2017 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
 import { Message } from '@theia/core/shared/@phosphor/messaging';
 import URI from '@theia/core/lib/common/uri';
-import { CommandService, SelectionService } from '@theia/core/lib/common';
-import { CorePreferences, Key, TreeModel, SelectableTreeNode } from '@theia/core/lib/browser';
-import {
-    ContextMenuRenderer, ExpandableTreeNode,
-    TreeProps, TreeNode
-} from '@theia/core/lib/browser';
-import { FileTreeWidget, FileNode, DirNode } from '@theia/filesystem/lib/browser';
+import { CommandService } from '@theia/core/lib/common';
+import { Key, TreeModel, ContextMenuRenderer, ExpandableTreeNode, TreeProps, TreeNode } from '@theia/core/lib/browser';
+import { DirNode, FileStatNodeData } from '@theia/filesystem/lib/browser';
 import { WorkspaceService, WorkspaceCommands } from '@theia/workspace/lib/browser';
-import { ApplicationShell } from '@theia/core/lib/browser/shell/application-shell';
 import { WorkspaceNode, WorkspaceRootNode } from './navigator-tree';
 import { FileNavigatorModel } from './navigator-model';
 import { isOSX, environment } from '@theia/core';
 import * as React from '@theia/core/shared/react';
 import { NavigatorContextKeyService } from './navigator-context-key-service';
-import { FileNavigatorCommands } from './navigator-contribution';
+import { nls } from '@theia/core/lib/common/nls';
+import { AbstractNavigatorTreeWidget } from './abstract-navigator-tree-widget';
 
 export const FILE_NAVIGATOR_ID = 'files';
-export const LABEL = 'No folder opened';
+export const LABEL = nls.localizeByDefault('No Folder Opened');
 export const CLASS = 'theia-Files';
 
 @injectable()
-export class FileNavigatorWidget extends FileTreeWidget {
+export class FileNavigatorWidget extends AbstractNavigatorTreeWidget {
 
-    @inject(CorePreferences) protected readonly corePreferences: CorePreferences;
-
-    @inject(NavigatorContextKeyService)
-    protected readonly contextKeyService: NavigatorContextKeyService;
+    @inject(CommandService) protected readonly commandService: CommandService;
+    @inject(NavigatorContextKeyService) protected readonly contextKeyService: NavigatorContextKeyService;
+    @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService;
 
     constructor(
-        @inject(TreeProps) readonly props: TreeProps,
-        @inject(FileNavigatorModel) readonly model: FileNavigatorModel,
+        @inject(TreeProps) props: TreeProps,
+        @inject(FileNavigatorModel) override readonly model: FileNavigatorModel,
         @inject(ContextMenuRenderer) contextMenuRenderer: ContextMenuRenderer,
-        @inject(CommandService) protected readonly commandService: CommandService,
-        @inject(SelectionService) protected readonly selectionService: SelectionService,
-        @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService,
-        @inject(ApplicationShell) protected readonly shell: ApplicationShell
     ) {
         super(props, model, contextMenuRenderer);
         this.id = FILE_NAVIGATOR_ID;
@@ -60,8 +51,12 @@ export class FileNavigatorWidget extends FileTreeWidget {
     }
 
     @postConstruct()
-    protected init(): void {
+    protected override init(): void {
         super.init();
+        // This ensures that the context menu command to hide this widget receives the label 'Folders'
+        // regardless of the name of workspace. See ViewContainer.updateToolbarItems.
+        const dataset = { ...this.title.dataset, visibilityCommandLabel: nls.localizeByDefault('Folders') };
+        this.title.dataset = dataset;
         this.updateSelectionContextKeys();
         this.toDispose.pushAll([
             this.model.onSelectionChanged(() =>
@@ -79,7 +74,7 @@ export class FileNavigatorWidget extends FileTreeWidget {
         ]);
     }
 
-    protected doUpdateRows(): void {
+    protected override doUpdateRows(): void {
         super.doUpdateRows();
         this.title.label = LABEL;
         if (WorkspaceNode.is(this.model.root)) {
@@ -98,30 +93,7 @@ export class FileNavigatorWidget extends FileTreeWidget {
         }
     }
 
-    protected enableDndOnMainPanel(): void {
-        const mainPanelNode = this.shell.mainPanel.node;
-        this.addEventListener(mainPanelNode, 'drop', async ({ dataTransfer }) => {
-            const treeNodes = dataTransfer && this.getSelectedTreeNodesFromData(dataTransfer) || [];
-            treeNodes.filter(FileNode.is).forEach(treeNode => {
-                if (!SelectableTreeNode.isSelected(treeNode)) {
-                    this.model.toggleNode(treeNode);
-                }
-            });
-            if (treeNodes.length > 0) {
-                this.commandService.executeCommand(FileNavigatorCommands.OPEN.id);
-            }
-        });
-        const handler = (e: DragEvent) => {
-            if (e.dataTransfer) {
-                e.dataTransfer.dropEffect = 'link';
-                e.preventDefault();
-            }
-        };
-        this.addEventListener(mainPanelNode, 'dragover', handler);
-        this.addEventListener(mainPanelNode, 'dragenter', handler);
-    }
-
-    protected getContainerTreeNode(): TreeNode | undefined {
+    override getContainerTreeNode(): TreeNode | undefined {
         const root = this.model.root;
         if (this.workspaceService.isMultiRootWorkspaceOpened) {
             return root;
@@ -132,22 +104,21 @@ export class FileNavigatorWidget extends FileTreeWidget {
         return undefined;
     }
 
-    protected renderTree(model: TreeModel): React.ReactNode {
+    protected override renderTree(model: TreeModel): React.ReactNode {
         if (this.model.root && this.isEmptyMultiRootWorkspace(model)) {
             return this.renderEmptyMultiRootWorkspace();
         }
         return super.renderTree(model);
     }
 
-    protected shouldShowWelcomeView(): boolean {
+    protected override shouldShowWelcomeView(): boolean {
         return this.model.root === undefined;
     }
 
-    protected onAfterAttach(msg: Message): void {
+    protected override onAfterAttach(msg: Message): void {
         super.onAfterAttach(msg);
         this.addClipboardListener(this.node, 'copy', e => this.handleCopy(e));
         this.addClipboardListener(this.node, 'paste', e => this.handlePaste(e));
-        this.enableDndOnMainPanel();
     }
 
     protected handleCopy(event: ClipboardEvent): void {
@@ -205,12 +176,12 @@ export class FileNavigatorWidget extends FileTreeWidget {
      */
     protected renderEmptyMultiRootWorkspace(): React.ReactNode {
         return <div className='theia-navigator-container'>
-            <div className='center'>You have not yet added a folder to the workspace.</div>
+            <div className='center'>{nls.localizeByDefault('You have not yet added a folder to the workspace.\n{0}', '')}</div>
             <div className='open-workspace-button-container'>
-                <button className='theia-button open-workspace-button' title='Add a folder to your workspace'
+                <button className='theia-button open-workspace-button' title={nls.localizeByDefault('Add Folder to Workspace')}
                     onClick={this.addFolder}
                     onKeyUp={this.keyUpHandler}>
-                    Add Folder
+                    {nls.localizeByDefault('Open Folder')}
                 </button>
             </div>
         </div>;
@@ -220,26 +191,29 @@ export class FileNavigatorWidget extends FileTreeWidget {
         return WorkspaceNode.is(model.root) && model.root.children.length === 0;
     }
 
-    protected handleClickEvent(node: TreeNode | undefined, event: React.MouseEvent<HTMLElement>): void {
-        const modifierKeyCombined: boolean = isOSX ? (event.shiftKey || event.metaKey) : (event.shiftKey || event.ctrlKey);
-        if (!modifierKeyCombined && node && this.corePreferences['workbench.list.openMode'] === 'singleClick') {
+    protected override tapNode(node?: TreeNode): void {
+        if (node && this.corePreferences['workbench.list.openMode'] === 'singleClick') {
             this.model.previewNode(node);
         }
-        super.handleClickEvent(node, event);
+        super.tapNode(node);
     }
 
-    protected onAfterShow(msg: Message): void {
+    protected override onAfterShow(msg: Message): void {
         super.onAfterShow(msg);
         this.contextKeyService.explorerViewletVisible.set(true);
     }
 
-    protected onAfterHide(msg: Message): void {
+    protected override onAfterHide(msg: Message): void {
         super.onAfterHide(msg);
         this.contextKeyService.explorerViewletVisible.set(false);
     }
 
     protected updateSelectionContextKeys(): void {
         this.contextKeyService.explorerResourceIsFolder.set(DirNode.is(this.model.selectedNodes[0]));
+        // As `FileStatNode` only created if `FileService.resolve` was successful, we can safely assume that
+        // a valid `FileSystemProvider` is available for the selected node. So we skip an additional check
+        // for provider availability here and check the node type.
+        this.contextKeyService.isFileSystemResource.set(FileStatNodeData.is(this.model.selectedNodes[0]));
     }
 
 }

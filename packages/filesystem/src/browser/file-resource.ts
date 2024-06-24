@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject } from '@theia/core/shared/inversify';
 import { Resource, ResourceVersion, ResourceResolver, ResourceError, ResourceSaveOptions } from '@theia/core/lib/common/resource';
@@ -22,9 +22,12 @@ import { Readable, ReadableStream } from '@theia/core/lib/common/stream';
 import URI from '@theia/core/lib/common/uri';
 import { FileOperation, FileOperationError, FileOperationResult, ETAG_DISABLED, FileSystemProviderCapabilities, FileReadStreamOptions, BinarySize } from '../common/files';
 import { FileService, TextFileOperationError, TextFileOperationResult } from './file-service';
-import { ConfirmDialog } from '@theia/core/lib/browser/dialogs';
+import { ConfirmDialog, Dialog } from '@theia/core/lib/browser/dialogs';
 import { LabelProvider } from '@theia/core/lib/browser/label-provider';
 import { GENERAL_MAX_FILE_SIZE_MB } from './filesystem-preferences';
+import { FrontendApplicationStateService } from '@theia/core/lib/browser/frontend-application-state';
+import { nls } from '@theia/core';
+import { MarkdownString } from '@theia/core/lib/common/markdown-rendering';
 
 export interface FileResourceVersion extends ResourceVersion {
     readonly encoding: string;
@@ -38,6 +41,7 @@ export namespace FileResourceVersion {
 }
 
 export interface FileResourceOptions {
+    readOnly: boolean | MarkdownString
     shouldOverwrite: () => Promise<boolean>
     shouldOpenAsText: (error: string) => Promise<boolean>
 }
@@ -51,12 +55,18 @@ export class FileResource implements Resource {
     protected readonly onDidChangeContentsEmitter = new Emitter<void>();
     readonly onDidChangeContents: Event<void> = this.onDidChangeContentsEmitter.event;
 
+    protected readonly onDidChangeReadOnlyEmitter = new Emitter<boolean | MarkdownString>();
+    readonly onDidChangeReadOnly: Event<boolean | MarkdownString> = this.onDidChangeReadOnlyEmitter.event;
+
     protected _version: FileResourceVersion | undefined;
     get version(): FileResourceVersion | undefined {
         return this._version;
     }
     get encoding(): string | undefined {
         return this._version?.encoding;
+    }
+    get readOnly(): boolean | MarkdownString {
+        return this.options.readOnly;
     }
 
     constructor(
@@ -65,6 +75,7 @@ export class FileResource implements Resource {
         protected readonly options: FileResourceOptions
     ) {
         this.toDispose.push(this.onDidChangeContentsEmitter);
+        this.toDispose.push(this.onDidChangeReadOnlyEmitter);
         this.toDispose.push(this.fileService.onDidFilesChange(event => {
             if (event.contains(this.uri)) {
                 this.sync();
@@ -81,11 +92,30 @@ export class FileResource implements Resource {
             console.error(e);
         }
         this.updateSavingContentChanges();
-        this.toDispose.push(this.fileService.onDidChangeFileSystemProviderCapabilities(e => {
+        this.toDispose.push(this.fileService.onDidChangeFileSystemProviderCapabilities(async e => {
             if (e.scheme === this.uri.scheme) {
-                this.updateSavingContentChanges();
+                this.updateReadOnly();
             }
         }));
+        this.fileService.onDidChangeFileSystemProviderReadOnlyMessage(async e => {
+            if (e.scheme === this.uri.scheme) {
+                this.updateReadOnly();
+            }
+        });
+    }
+
+    protected async updateReadOnly(): Promise<void> {
+        const oldReadOnly = this.options.readOnly;
+        const readOnlyMessage = this.fileService.getReadOnlyMessage(this.uri);
+        if (readOnlyMessage) {
+            this.options.readOnly = readOnlyMessage;
+        } else {
+            this.options.readOnly = this.fileService.hasCapability(this.uri, FileSystemProviderCapabilities.Readonly);
+        }
+        if (this.options.readOnly !== oldReadOnly) {
+            this.updateSavingContentChanges();
+            this.onDidChangeReadOnlyEmitter.fire(this.options.readOnly);
+        }
     }
 
     dispose(): void {
@@ -109,14 +139,15 @@ export class FileResource implements Resource {
             return stat.value;
         } catch (e) {
             if (e instanceof TextFileOperationError && e.textFileOperationResult === TextFileOperationResult.FILE_IS_BINARY) {
-                if (await this.shouldOpenAsText('The file is either binary or uses an unsupported text encoding.')) {
+                if (await this.shouldOpenAsText(nls.localize('theia/filesystem/fileResource/binaryTitle', 'The file is either binary or uses an unsupported text encoding.'))) {
                     this.acceptTextOnly = false;
                     return this.readContents(options);
                 }
             } else if (e instanceof FileOperationError && e.fileOperationResult === FileOperationResult.FILE_TOO_LARGE) {
                 const stat = await this.fileService.resolve(this.uri, { resolveMetadata: true });
                 const maxFileSize = GENERAL_MAX_FILE_SIZE_MB * 1024 * 1024;
-                if (this.limits?.size !== maxFileSize && await this.shouldOpenAsText(`The file is too large (${BinarySize.formatSize(stat.size)}).`)) {
+                if (this.limits?.size !== maxFileSize && await this.shouldOpenAsText(nls.localize(
+                    'theia/filesystem/fileResource/largeFileTitle', 'The file is too large ({0}).', BinarySize.formatSize(stat.size)))) {
                     this.limits = {
                         size: maxFileSize
                     };
@@ -153,14 +184,15 @@ export class FileResource implements Resource {
             return stat.value;
         } catch (e) {
             if (e instanceof TextFileOperationError && e.textFileOperationResult === TextFileOperationResult.FILE_IS_BINARY) {
-                if (await this.shouldOpenAsText('The file is either binary or uses an unsupported text encoding.')) {
+                if (await this.shouldOpenAsText(nls.localize('theia/filesystem/fileResource/binaryTitle', 'The file is either binary or uses an unsupported text encoding.'))) {
                     this.acceptTextOnly = false;
                     return this.readStream(options);
                 }
             } else if (e instanceof FileOperationError && e.fileOperationResult === FileOperationResult.FILE_TOO_LARGE) {
                 const stat = await this.fileService.resolve(this.uri, { resolveMetadata: true });
                 const maxFileSize = GENERAL_MAX_FILE_SIZE_MB * 1024 * 1024;
-                if (this.limits?.size !== maxFileSize && await this.shouldOpenAsText(`The file is too large (${BinarySize.formatSize(stat.size)}).`)) {
+                if (this.limits?.size !== maxFileSize && await this.shouldOpenAsText(nls.localize(
+                    'theia/filesystem/fileResource/largeFileTitle', 'The file is too large ({0}).', BinarySize.formatSize(stat.size)))) {
                     this.limits = {
                         size: maxFileSize
                     };
@@ -180,15 +212,7 @@ export class FileResource implements Resource {
         }
     }
 
-    saveContents(content: string, options?: ResourceSaveOptions): Promise<void> {
-        return this.doWrite(content, options);
-    }
-
-    saveStream(content: Readable<string>, options?: ResourceSaveOptions): Promise<void> {
-        return this.doWrite(content, options);
-    }
-
-    protected async doWrite(content: string | Readable<string>, options?: ResourceSaveOptions): Promise<void> {
+    protected doWrite = async (content: string | Readable<string>, options?: ResourceSaveOptions): Promise<void> => {
         const version = options?.version || this._version;
         const current = FileResourceVersion.is(version) ? version : undefined;
         const etag = current?.etag;
@@ -214,14 +238,22 @@ export class FileResource implements Resource {
             }
             throw e;
         }
-    }
+    };
 
+    saveStream?: Resource['saveStream'];
+    saveContents?: Resource['saveContents'];
     saveContentChanges?: Resource['saveContentChanges'];
     protected updateSavingContentChanges(): void {
-        if (this.fileService.hasCapability(this.uri, FileSystemProviderCapabilities.Update)) {
-            this.saveContentChanges = this.doSaveContentChanges;
-        } else {
+        if (this.readOnly) {
             delete this.saveContentChanges;
+            delete this.saveContents;
+            delete this.saveStream;
+        } else {
+            this.saveContents = this.doWrite;
+            this.saveStream = this.doWrite;
+            if (this.fileService.hasCapability(this.uri, FileSystemProviderCapabilities.Update)) {
+                this.saveContentChanges = this.doSaveContentChanges;
+            }
         }
     }
     protected doSaveContentChanges: Resource['saveContentChanges'] = async (changes, options) => {
@@ -297,6 +329,9 @@ export class FileResourceResolver implements ResourceResolver {
     @inject(LabelProvider)
     protected readonly labelProvider: LabelProvider;
 
+    @inject(FrontendApplicationStateService)
+    protected readonly applicationState: FrontendApplicationStateService;
+
     async resolve(uri: URI): Promise<FileResource> {
         let stat;
         try {
@@ -309,7 +344,13 @@ export class FileResourceResolver implements ResourceResolver {
         if (stat && stat.isDirectory) {
             throw new Error('The given uri is a directory: ' + this.labelProvider.getLongName(uri));
         }
+
+        const readOnlyMessage = this.fileService.getReadOnlyMessage(uri);
+        const isFileSystemReadOnly = this.fileService.hasCapability(uri, FileSystemProviderCapabilities.Readonly);
+        const readOnly = readOnlyMessage ?? (isFileSystemReadOnly ? isFileSystemReadOnly : (stat?.isReadonly ?? false));
+
         return new FileResource(uri, this.fileService, {
+            readOnly: readOnly,
             shouldOverwrite: () => this.shouldOverwrite(uri),
             shouldOpenAsText: error => this.shouldOpenAsText(uri, error)
         });
@@ -317,22 +358,33 @@ export class FileResourceResolver implements ResourceResolver {
 
     protected async shouldOverwrite(uri: URI): Promise<boolean> {
         const dialog = new ConfirmDialog({
-            title: `The file '${this.labelProvider.getName(uri)}' has been changed on the file system.`,
-            msg: `Do you want to overwrite the changes made to '${this.labelProvider.getLongName(uri)}' on the file system?`,
-            ok: 'Yes',
-            cancel: 'No'
+            title: nls.localize('theia/filesystem/fileResource/overwriteTitle', "The file '{0}' has been changed on the file system.", this.labelProvider.getName(uri)),
+            msg: nls.localize('theia/fileSystem/fileResource/overWriteBody',
+                "Do you want to overwrite the changes made to '{0}' on the file system?", this.labelProvider.getLongName(uri)),
+            ok: Dialog.YES,
+            cancel: Dialog.NO,
         });
         return !!await dialog.open();
     }
 
     protected async shouldOpenAsText(uri: URI, error: string): Promise<boolean> {
-        const dialog = new ConfirmDialog({
-            title: error,
-            msg: `Opening it might take some time and might make the IDE unresponsive. Do you want to open '${this.labelProvider.getLongName(uri)}' anyway?`,
-            ok: 'Yes',
-            cancel: 'No'
-        });
-        return !!await dialog.open();
+        switch (this.applicationState.state) {
+            case 'init':
+            case 'started_contributions':
+            case 'attached_shell':
+                return true; // We're restoring state - assume that we should open files that were previously open.
+            default: {
+                const dialog = new ConfirmDialog({
+                    title: error,
+                    msg: nls.localize('theia/filesystem/fileResource/binaryFileQuery',
+                        "Opening it might take some time and might make the IDE unresponsive. Do you want to open '{0}' anyway?", this.labelProvider.getLongName(uri)
+                    ),
+                    ok: Dialog.YES,
+                    cancel: Dialog.NO,
+                });
+                return !!await dialog.open();
+            }
+        }
     }
 
 }

@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (c) 2021 SAP SE or an SAP affiliate company and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2021 SAP SE or an SAP affiliate company and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -36,14 +36,14 @@ import { MonacoEditorModel } from '@theia/monaco/lib/browser/monaco-editor-model
 import { EditorModelService } from '../text-editor-model-service';
 import { CustomEditorService } from './custom-editor-service';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
-import { UndoRedoService } from './undo-redo-service';
+import { UndoRedoService } from '@theia/editor/lib/browser/undo-redo-service';
 import { WebviewsMainImpl } from '../webviews-main';
 import { WidgetManager } from '@theia/core/lib/browser/widget-manager';
-import { ApplicationShell, DefaultUriLabelProviderContribution, Saveable, SaveOptions } from '@theia/core/lib/browser';
-import { WebviewOptions, WebviewPanelOptions, ViewColumn } from '@theia/plugin';
+import { ApplicationShell, DefaultUriLabelProviderContribution, Saveable, SaveOptions, WidgetOpenerOptions } from '@theia/core/lib/browser';
+import { WebviewOptions, WebviewPanelOptions, WebviewPanelShowOptions } from '@theia/plugin';
 import { WebviewWidgetIdentifier } from '../webview/webview';
 import { EditorPreferences } from '@theia/editor/lib/browser';
-import { EditorPosition } from '../../../common/plugin-api-rpc';
+import { ViewColumn, WebviewPanelTargetArea } from '../../../plugin/types-impl';
 
 const enum CustomEditorModelType {
     Custom,
@@ -111,7 +111,7 @@ export class CustomEditorsMainImpl implements CustomEditorsMain, Disposable {
         const disposables = new DisposableCollection();
 
         disposables.push(
-            this.customEditorRegistry.registerResolver(viewType, async widget => {
+            this.customEditorRegistry.registerResolver(viewType, async (widget, widgetOpenerOptions) => {
                 const { resource, identifier } = widget;
                 widget.options = options;
 
@@ -139,18 +139,18 @@ export class CustomEditorsMainImpl implements CustomEditorsMain, Disposable {
                     widget.onMove(async (newResource: TheiaURI) => {
                         const oldModel = modelRef;
                         modelRef = await this.getOrCreateCustomEditorModel(modelType, newResource, viewType, onMoveCancelTokenSource.token);
-                        this.proxy.$onMoveCustomEditor(identifier.id, URI.file(newResource.path.toString()), viewType);
+                        this.proxy.$onMoveCustomEditor(identifier.id, newResource.toComponents(), viewType);
                         oldModel.dispose();
                     });
                 }
 
                 const _cancellationSource = new CancellationTokenSource();
                 await this.proxy.$resolveWebviewEditor(
-                    URI.file(resource.path.toString()),
+                    resource.toComponents(),
                     identifier.id,
                     viewType,
                     this.labelProvider.getName(resource)!,
-                    EditorPosition.ONE, // TODO: fix this when Theia has support splitting editors,
+                    widgetOpenerOptions,
                     options,
                     _cancellationSource.token
                 );
@@ -189,7 +189,7 @@ export class CustomEditorsMainImpl implements CustomEditorsMain, Disposable {
                 return this.customEditorService.models.add(resource, viewType, model);
             }
             case CustomEditorModelType.Custom: {
-                const model = MainCustomEditorModel.create(this.proxy, viewType, resource, this.undoRedoService, this.fileService, this.editorPreferences, cancellationToken);
+                const model = MainCustomEditorModel.create(this.proxy, viewType, resource, this.undoRedoService, this.fileService, cancellationToken);
                 return this.customEditorService.models.add(resource, viewType, model);
             }
         }
@@ -217,17 +217,18 @@ export class CustomEditorsMainImpl implements CustomEditorsMain, Disposable {
     async $createCustomEditorPanel(
         panelId: string,
         title: string,
-        viewColumn: ViewColumn,
+        widgetOpenerOptions: WidgetOpenerOptions | undefined,
         options: WebviewPanelOptions & WebviewOptions
     ): Promise<void> {
         const view = await this.widgetManager.getOrCreateWidget<CustomEditorWidget>(CustomEditorWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id: panelId });
         this.webviewsMain.hookWebview(view);
         view.title.label = title;
-        const { enableFindWidget, retainContextWhenHidden, enableScripts, localResourceRoots, ...contentOptions } = options;
-        view.viewColumn = viewColumn;
+        const { enableFindWidget, retainContextWhenHidden, enableScripts, enableForms, localResourceRoots, ...contentOptions } = options;
+        view.viewColumn = ViewColumn.One; // behaviour might be overridden later using widgetOpenerOptions (if available)
         view.options = { enableFindWidget, retainContextWhenHidden };
         view.setContentOptions({
             allowScripts: enableScripts,
+            allowForms: enableForms,
             localResourceRoots: localResourceRoots && localResourceRoots.map(root => root.toString()),
             ...contentOptions,
             ...view.contentOptions
@@ -238,7 +239,39 @@ export class CustomEditorsMainImpl implements CustomEditorsMain, Disposable {
             }
             return;
         }
-        this.webviewsMain.addOrReattachWidget(view, { preserveFocus: true });
+        const showOptions: WebviewPanelShowOptions = {
+            preserveFocus: true
+        };
+
+        if (widgetOpenerOptions) {
+            if (widgetOpenerOptions.mode === 'reveal') {
+                showOptions.preserveFocus = false;
+            }
+
+            if (widgetOpenerOptions.widgetOptions) {
+                let area: WebviewPanelTargetArea;
+                switch (widgetOpenerOptions.widgetOptions.area) {
+                    case 'main':
+                        area = WebviewPanelTargetArea.Main;
+                    case 'left':
+                        area = WebviewPanelTargetArea.Left;
+                    case 'right':
+                        area = WebviewPanelTargetArea.Right;
+                    case 'bottom':
+                        area = WebviewPanelTargetArea.Bottom;
+                    default: // includes 'top' and 'secondaryWindow'
+                        area = WebviewPanelTargetArea.Main;
+                }
+                showOptions.area = area;
+
+                if (widgetOpenerOptions.widgetOptions.mode === 'split-right' ||
+                    widgetOpenerOptions.widgetOptions.mode === 'open-to-right') {
+                    showOptions.viewColumn = ViewColumn.Beside;
+                }
+            }
+        }
+
+        this.webviewsMain.addOrReattachWidget(view, showOptions);
     }
 }
 
@@ -264,8 +297,8 @@ export class MainCustomEditorModel implements CustomEditorModel {
     private readonly onDirtyChangedEmitter = new Emitter<void>();
     readonly onDirtyChanged = this.onDirtyChangedEmitter.event;
 
-    autoSave: 'on' | 'off';
-    autoSaveDelay: number;
+    private readonly onContentChangedEmitter = new Emitter<void>();
+    readonly onContentChanged = this.onContentChangedEmitter.event;
 
     static async create(
         proxy: CustomEditorsExt,
@@ -273,11 +306,10 @@ export class MainCustomEditorModel implements CustomEditorModel {
         resource: TheiaURI,
         undoRedoService: UndoRedoService,
         fileService: FileService,
-        editorPreferences: EditorPreferences,
         cancellation: CancellationToken,
     ): Promise<MainCustomEditorModel> {
-        const { editable } = await proxy.$createCustomDocument(URI.file(resource.path.toString()), viewType, undefined, cancellation);
-        return new MainCustomEditorModel(proxy, viewType, resource, editable, undoRedoService, fileService, editorPreferences);
+        const { editable } = await proxy.$createCustomDocument(resource.toComponents(), viewType, {}, cancellation);
+        return new MainCustomEditorModel(proxy, viewType, resource, editable, undoRedoService, fileService);
     }
 
     constructor(
@@ -286,27 +318,13 @@ export class MainCustomEditorModel implements CustomEditorModel {
         private readonly editorResource: TheiaURI,
         private readonly editable: boolean,
         private readonly undoRedoService: UndoRedoService,
-        private readonly fileService: FileService,
-        private readonly editorPreferences: EditorPreferences
+        private readonly fileService: FileService
     ) {
-        this.autoSave = this.editorPreferences.get('editor.autoSave', undefined, editorResource.toString());
-        this.autoSaveDelay = this.editorPreferences.get('editor.autoSaveDelay', undefined, editorResource.toString());
-
-        this.toDispose.push(
-            this.editorPreferences.onPreferenceChanged(event => {
-                if (event.preferenceName === 'editor.autoSave') {
-                    this.autoSave = this.editorPreferences.get('editor.autoSave', undefined, editorResource.toString());
-                }
-                if (event.preferenceName === 'editor.autoSaveDelay') {
-                    this.autoSaveDelay = this.editorPreferences.get('editor.autoSaveDelay', undefined, editorResource.toString());
-                }
-            })
-        );
         this.toDispose.push(this.onDirtyChangedEmitter);
     }
 
     get resource(): URI {
-        return URI.file(this.editorResource.path.toString());
+        return URI.from(this.editorResource.toComponents());
     }
 
     get dirty(): boolean {
@@ -408,7 +426,7 @@ export class MainCustomEditorModel implements CustomEditorModel {
     async saveCustomEditorAs(resource: TheiaURI, targetResource: TheiaURI, options?: SaveOptions): Promise<void> {
         if (this.editable) {
             const source = new CancellationTokenSource();
-            await this.proxy.$onSaveAs(this.resource, this.viewType, URI.file(targetResource.path.toString()), source.token);
+            await this.proxy.$onSaveAs(this.resource, this.viewType, targetResource.toComponents(), source.token);
             this.change(() => {
                 this.savePoint = this.currentEditIndex;
             });
@@ -472,13 +490,7 @@ export class MainCustomEditorModel implements CustomEditorModel {
         if (this.dirty !== wasDirty) {
             this.onDirtyChangedEmitter.fire();
         }
-
-        if (this.autoSave === 'on') {
-            const handle = window.setTimeout(() => {
-                this.save();
-                window.clearTimeout(handle);
-            }, this.autoSaveDelay);
-        }
+        this.onContentChangedEmitter.fire();
     }
 
 }
@@ -488,13 +500,14 @@ export class CustomTextEditorModel implements CustomEditorModel {
     private readonly toDispose = new DisposableCollection();
     private readonly onDirtyChangedEmitter = new Emitter<void>();
     readonly onDirtyChanged = this.onDirtyChangedEmitter.event;
-    readonly autoSave: 'on' | 'off';
+    private readonly onContentChangedEmitter = new Emitter<void>();
+    readonly onContentChanged = this.onContentChangedEmitter.event;
 
     static async create(
         viewType: string,
         resource: TheiaURI,
         editorModelService: EditorModelService,
-        fileService: FileService
+        fileService: FileService,
     ): Promise<CustomTextEditorModel> {
         const model = await editorModelService.createModelReference(resource);
         model.object.suppressOpenEditorWhenDirty = true;
@@ -505,14 +518,20 @@ export class CustomTextEditorModel implements CustomEditorModel {
         readonly viewType: string,
         readonly editorResource: TheiaURI,
         private readonly model: Reference<MonacoEditorModel>,
-        private readonly fileService: FileService
+        private readonly fileService: FileService,
     ) {
         this.toDispose.push(
             this.editorTextModel.onDirtyChanged(e => {
                 this.onDirtyChangedEmitter.fire();
             })
         );
+        this.toDispose.push(
+            this.editorTextModel.onContentChanged(e => {
+                this.onContentChangedEmitter.fire();
+            })
+        );
         this.toDispose.push(this.onDirtyChangedEmitter);
+        this.toDispose.push(this.onContentChangedEmitter);
     }
 
     dispose(): void {
@@ -521,7 +540,7 @@ export class CustomTextEditorModel implements CustomEditorModel {
     }
 
     get resource(): URI {
-        return URI.file(this.editorResource.path.toString());
+        return URI.from(this.editorResource.toComponents());
     }
 
     get dirty(): boolean {
@@ -529,7 +548,7 @@ export class CustomTextEditorModel implements CustomEditorModel {
     };
 
     get readonly(): boolean {
-        return this.editorTextModel.readOnly;
+        return Boolean(this.editorTextModel.readOnly);
     }
 
     get editorTextModel(): MonacoEditorModel {

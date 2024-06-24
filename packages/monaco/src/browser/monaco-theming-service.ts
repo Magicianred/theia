@@ -1,30 +1,30 @@
-/********************************************************************************
- * Copyright (C) 2019 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { injectable, inject } from '@theia/core/shared/inversify';
 import * as jsoncparser from 'jsonc-parser';
 import * as plistparser from 'fast-plist';
-import { ThemeService } from '@theia/core/lib/browser/theming';
 import URI from '@theia/core/lib/common/uri';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { MonacoThemeRegistry } from './textmate/monaco-theme-registry';
-import { getThemes, putTheme, MonacoThemeState, stateToTheme } from './monaco-indexed-db';
+import { getThemes, putTheme, MonacoThemeState, stateToTheme, ThemeServiceWithDB } from './monaco-indexed-db';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
+import * as monaco from '@theia/monaco-editor-core';
 
 export interface MonacoTheme {
     id?: string;
@@ -58,9 +58,11 @@ export interface MonacoThemeJson {
 @injectable()
 export class MonacoThemingService {
 
-    @inject(FileService)
-    protected readonly fileService: FileService;
+    @inject(FileService) protected readonly fileService: FileService;
+    @inject(MonacoThemeRegistry) protected readonly monacoThemeRegistry: MonacoThemeRegistry;
+    @inject(ThemeServiceWithDB) protected readonly themeService: ThemeServiceWithDB;
 
+    /** Register themes whose configuration needs to be loaded */
     register(theme: MonacoTheme, pending: { [uri: string]: Promise<any> } = {}): Disposable {
         const toDispose = new DisposableCollection(Disposable.create(() => { /* mark as not disposed */ }));
         this.doRegister(theme, pending, toDispose);
@@ -79,7 +81,7 @@ export class MonacoThemingService {
             }
             const label = theme.label || new URI(theme.uri).path.base;
             const { id, description, uiTheme } = theme;
-            toDispose.push(MonacoThemingService.register({ id, label, description, uiTheme: uiTheme, json, includes }));
+            toDispose.push(this.registerParsedTheme({ id, label, description, uiTheme: uiTheme, json, includes }));
         } catch (e) {
             console.error('Failed to load theme from ' + theme.uri, e);
         }
@@ -118,7 +120,7 @@ export class MonacoThemingService {
                 return;
             }
         }
-        this.cleanEmpty(json.colors);
+        this.clean(json.colors);
         return json;
     }
 
@@ -136,43 +138,46 @@ export class MonacoThemingService {
         return pending[referencedUri];
     }
 
-    static init(): void {
+    initialize(): void {
+        this.monacoThemeRegistry.initializeDefaultThemes();
         this.updateBodyUiTheme();
-        ThemeService.get().onThemeChange(() => this.updateBodyUiTheme());
+        this.themeService.onDidColorThemeChange(() => this.updateBodyUiTheme());
+        this.themeService.onDidRetrieveTheme(theme => this.monacoThemeRegistry.setTheme(MonacoThemingService.toCssSelector(theme.id), theme.data));
         this.restore();
     }
 
-    static register(theme: MonacoThemeJson): Disposable {
+    /** register a theme whose configuration has already been loaded */
+    registerParsedTheme(theme: MonacoThemeJson): Disposable {
         const uiTheme = theme.uiTheme || 'vs-dark';
         const { label, description, json, includes } = theme;
         const id = theme.id || label;
         const cssSelector = MonacoThemingService.toCssSelector(id);
-        const data = MonacoThemeRegistry.SINGLETON.register(json, includes, cssSelector, uiTheme);
-        return MonacoThemingService.doRegister({ id, label, description, uiTheme, data });
+        const data = this.monacoThemeRegistry.register(json, includes, cssSelector, uiTheme);
+        return this.doRegisterParsedTheme({ id, label, description, uiTheme, data });
     }
 
-    protected static toUpdateUiTheme = new DisposableCollection();
-    protected static updateBodyUiTheme(): void {
+    protected toUpdateUiTheme = new DisposableCollection();
+    protected updateBodyUiTheme(): void {
         this.toUpdateUiTheme.dispose();
-        const type = ThemeService.get().getCurrentTheme().type;
+        const type = this.themeService.getCurrentTheme().type;
         const uiTheme: monaco.editor.BuiltinTheme = type === 'hc' ? 'hc-black' : type === 'light' ? 'vs' : 'vs-dark';
         document.body.classList.add(uiTheme);
         this.toUpdateUiTheme.push(Disposable.create(() => document.body.classList.remove(uiTheme)));
     }
 
-    protected static doRegister(state: MonacoThemeState): Disposable {
+    protected doRegisterParsedTheme(state: MonacoThemeState): Disposable {
         return new DisposableCollection(
-            ThemeService.get().register(stateToTheme(state)),
+            this.themeService.register(stateToTheme(state)),
             putTheme(state)
         );
     }
 
-    protected static async restore(): Promise<void> {
+    protected async restore(): Promise<void> {
         try {
             const themes = await getThemes();
             for (const state of themes) {
-                MonacoThemeRegistry.SINGLETON.setTheme(state.data.name!, state.data);
-                MonacoThemingService.doRegister(state);
+                this.monacoThemeRegistry.setTheme(state.data.name!, state.data);
+                this.doRegisterParsedTheme(state);
             }
         } catch (e) {
             console.error('Failed to restore monaco themes', e);
@@ -188,10 +193,10 @@ export class MonacoThemingService {
         return str;
     }
 
-    private cleanEmpty(obj: any): void {
+    /** removes all invalid theming values */
+    private clean(obj: any): void {
         for (const key in obj) {
-            // eslint-disable-next-line no-null/no-null
-            if ([null, undefined].includes(obj[key])) {
+            if (typeof obj[key] !== 'string') {
                 delete obj[key];
             }
         }

@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 import { inject, injectable } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
 import {
@@ -25,14 +25,14 @@ import {
     MenuModelRegistry,
     Mutable
 } from '@theia/core';
-import { DiffUris, Widget } from '@theia/core/lib/browser';
+import { codicon, DiffUris, Widget } from '@theia/core/lib/browser';
 import {
     TabBarToolbarContribution,
     TabBarToolbarItem,
     TabBarToolbarRegistry
 } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 import { EditorContextMenu, EditorManager, EditorOpenerOptions, EditorWidget } from '@theia/editor/lib/browser';
-import { Git, GitFileChange, GitFileStatus } from '../common';
+import { Git, GitFileChange, GitFileStatus, GitWatcher, Repository } from '../common';
 import { GitRepositoryTracker } from './git-repository-tracker';
 import { GitAction, GitQuickOpenService } from './git-quick-open-service';
 import { GitSyncService } from './git-sync-service';
@@ -42,6 +42,8 @@ import { GitErrorHandler } from '../browser/git-error-handler';
 import { ScmWidget } from '@theia/scm/lib/browser/scm-widget';
 import { ScmTreeWidget } from '@theia/scm/lib/browser/scm-tree-widget';
 import { ScmCommand, ScmResource } from '@theia/scm/lib/browser/scm-provider';
+import { LineRange } from '@theia/scm/lib/browser/dirty-diff/diff-computer';
+import { DirtyDiffWidget, SCM_CHANGE_TITLE_MENU } from '@theia/scm/lib/browser/dirty-diff/dirty-diff-widget';
 import { ProgressService } from '@theia/core/lib/common/progress-service';
 import { GitPreferences } from './git-preferences';
 import { ColorContribution } from '@theia/core/lib/browser/color-application-contribution';
@@ -49,170 +51,201 @@ import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
 import { ScmInputIssueType } from '@theia/scm/lib/browser/scm-input';
 import { DecorationsService } from '@theia/core/lib/browser/decorations-service';
 import { GitDecorationProvider } from './git-decoration-provider';
+import { nls } from '@theia/core/lib/common/nls';
 
 export namespace GIT_COMMANDS {
-    export const CLONE = {
+
+    const GIT_CATEGORY_KEY = 'vscode.git/package/displayName';
+    const GIT_CATEGORY = 'Git';
+
+    export const CLONE = Command.toLocalizedCommand({
         id: 'git.clone',
-        label: 'Git: Clone...'
-    };
-    export const FETCH = {
+        category: GIT_CATEGORY,
+        label: 'Clone...'
+    }, 'vscode.git/package/command.clone', GIT_CATEGORY_KEY);
+    export const FETCH = Command.toLocalizedCommand({
         id: 'git.fetch',
-        label: 'Git: Fetch...'
-    };
-    export const PULL_DEFAULT = {
+        category: GIT_CATEGORY,
+        label: 'Fetch...'
+    }, 'vscode.git/package/command.fetch', GIT_CATEGORY_KEY);
+    export const PULL_DEFAULT = Command.toLocalizedCommand({
         id: 'git.pull.default',
-        label: 'Git: Pull'
-    };
-    export const PULL_DEFAULT_FAVORITE = {
+        category: GIT_CATEGORY,
+        label: 'Pull'
+    }, 'vscode.git/package/command.pull', GIT_CATEGORY_KEY);
+    export const PULL_DEFAULT_FAVORITE: Command = {
         id: PULL_DEFAULT.id + '.favorite',
-        label: PULL_DEFAULT.label
+        label: PULL_DEFAULT.label,
+        originalLabel: PULL_DEFAULT.originalLabel
     };
-    export const PULL = {
+    export const PULL = Command.toLocalizedCommand({
         id: 'git.pull',
-        label: 'Git: Pull from...'
-    };
-    export const PUSH_DEFAULT = {
+        category: GIT_CATEGORY,
+        label: 'Pull from...'
+    }, 'vscode.git/package/command.pullFrom', GIT_CATEGORY_KEY);
+    export const PUSH_DEFAULT = Command.toLocalizedCommand({
         id: 'git.push.default',
-        label: 'Git: Push'
-    };
-    export const PUSH_DEFAULT_FAVORITE = {
+        category: GIT_CATEGORY,
+        label: 'Push'
+    }, 'vscode.git/package/command.push', GIT_CATEGORY_KEY);
+    export const PUSH_DEFAULT_FAVORITE: Command = {
         id: PUSH_DEFAULT.id + '.favorite',
-        label: PUSH_DEFAULT.label
+        label: PUSH_DEFAULT.label,
+        originalLabel: PUSH_DEFAULT.originalLabel
     };
-    export const PUSH = {
+    export const PUSH = Command.toLocalizedCommand({
         id: 'git.push',
-        label: 'Git: Push to...'
-    };
-    export const MERGE = {
+        category: GIT_CATEGORY,
+        label: 'Push to...'
+    }, 'vscode.git/package/command.pushTo', GIT_CATEGORY_KEY);
+    export const MERGE = Command.toLocalizedCommand({
         id: 'git.merge',
-        label: 'Git: Merge...'
-    };
-    export const CHECKOUT = {
+        category: GIT_CATEGORY,
+        label: 'Merge...'
+    }, 'vscode.git/package/command.merge', GIT_CATEGORY_KEY);
+    export const CHECKOUT = Command.toLocalizedCommand({
         id: 'git.checkout',
-        label: 'Git: Checkout'
-    };
+        category: GIT_CATEGORY,
+        label: 'Checkout'
+    }, 'vscode.git/package/command.checkout', GIT_CATEGORY_KEY);
     export const COMMIT = {
-        id: 'git.commit.all',
+        ...Command.toLocalizedCommand({
+            id: 'git.commit.all',
+            label: 'Commit',
+            iconClass: codicon('check')
+        }, 'vscode.git/package/command.commit'),
         tooltip: 'Commit all the staged changes',
-        iconClass: 'fa fa-check',
-        label: 'Commit',
     };
-    export const COMMIT_ADD_SIGN_OFF = {
+    export const COMMIT_ADD_SIGN_OFF = Command.toLocalizedCommand({
         id: 'git-commit-add-sign-off',
         label: 'Add Signed-off-by',
-        iconClass: 'fa fa-pencil-square-o',
-        category: 'Git'
-    };
+        category: GIT_CATEGORY,
+        iconClass: codicon('edit')
+    }, 'theia/git/addSignedOff', GIT_CATEGORY_KEY);
     export const COMMIT_AMEND = {
         id: 'git.commit.amend'
     };
     export const COMMIT_SIGN_OFF = {
         id: 'git.commit.signOff'
     };
-    export const OPEN_FILE: Command = {
+    export const OPEN_FILE = Command.toLocalizedCommand({
         id: 'git.open.file',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Open File',
-        iconClass: 'theia-open-file-icon'
-    };
-    export const OPEN_CHANGED_FILE: Command = {
+        iconClass: codicon('go-to-file')
+    }, 'vscode.git/package/command.openFile', GIT_CATEGORY_KEY);
+    export const OPEN_CHANGED_FILE = Command.toLocalizedCommand({
         id: 'git.open.changed.file',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Open File',
-        iconClass: 'open-file'
-    };
-    export const OPEN_CHANGES: Command = {
+        iconClass: codicon('go-to-file')
+    }, 'vscode.git/package/command.openFile', GIT_CATEGORY_KEY);
+    export const OPEN_CHANGES = Command.toLocalizedCommand({
         id: 'git.open.changes',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Open Changes',
-        iconClass: 'theia-open-change-icon'
-    };
-    export const SYNC = {
+        iconClass: codicon('git-compare')
+    }, 'vscode.git/package/command.openChange', GIT_CATEGORY_KEY);
+    export const SYNC = Command.toLocalizedCommand({
         id: 'git.sync',
-        label: 'Git: Sync'
-    };
-    export const PUBLISH = {
+        category: GIT_CATEGORY,
+        label: 'Sync'
+    }, 'vscode.git/package/command.sync', GIT_CATEGORY_KEY);
+    export const PUBLISH = Command.toLocalizedCommand({
         id: 'git.publish',
-        label: 'Git: Publish Branch'
-    };
-    export const STAGE = {
+        category: GIT_CATEGORY,
+        label: 'Publish Branch'
+    }, 'vscode.git/package/command.publish', GIT_CATEGORY_KEY);
+    export const STAGE = Command.toLocalizedCommand({
         id: 'git.stage',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Stage Changes',
-        iconClass: 'fa fa-plus'
-    };
-    export const STAGE_ALL = {
+        iconClass: codicon('add')
+    }, 'vscode.git/package/command.stage', GIT_CATEGORY_KEY);
+    export const STAGE_ALL = Command.toLocalizedCommand({
         id: 'git.stage.all',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Stage All Changes',
-        iconClass: 'fa fa-plus',
-    };
-    export const UNSTAGE = {
+        iconClass: codicon('add')
+    }, 'vscode.git/package/command.stageAll', GIT_CATEGORY_KEY);
+    export const STAGE_CHANGE = Command.toLocalizedCommand({
+        id: 'git.stage.change',
+        category: GIT_CATEGORY,
+        label: 'Stage Change',
+        iconClass: codicon('add')
+    }, 'vscode.git/package/command.stageChange', GIT_CATEGORY_KEY);
+    export const REVERT_CHANGE = Command.toLocalizedCommand({
+        id: 'git.revert.change',
+        category: GIT_CATEGORY,
+        label: 'Revert Change',
+        iconClass: codicon('discard')
+    }, 'vscode.git/package/command.revertChange', GIT_CATEGORY_KEY);
+    export const UNSTAGE = Command.toLocalizedCommand({
         id: 'git.unstage',
-        iconClass: 'fa fa-minus',
-        category: 'Git',
-        label: 'Unstage Changes'
-    };
-    export const UNSTAGE_ALL = {
+        category: GIT_CATEGORY,
+        label: 'Unstage Changes',
+        iconClass: codicon('dash')
+    }, 'vscode.git/package/command.unstage', GIT_CATEGORY_KEY);
+    export const UNSTAGE_ALL = Command.toLocalizedCommand({
         id: 'git.unstage.all',
-        iconClass: 'fa fa-minus',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Unstage All',
-    };
-    export const DISCARD = {
+        iconClass: codicon('dash')
+    }, 'vscode.git/package/command.unstageAll', GIT_CATEGORY_KEY);
+    export const DISCARD = Command.toLocalizedCommand({
         id: 'git.discard',
-        iconClass: 'fa fa-undo',
-        category: 'Git',
+        iconClass: codicon('discard'),
+        category: GIT_CATEGORY,
         label: 'Discard Changes'
-    };
-    export const DISCARD_ALL = {
+    }, 'vscode.git/package/command.clean', GIT_CATEGORY_KEY);
+    export const DISCARD_ALL = Command.toLocalizedCommand({
         id: 'git.discard.all',
-        iconClass: 'fa fa-undo',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Discard All Changes',
-    };
-    export const STASH = {
+        iconClass: codicon('discard')
+    }, 'vscode.git/package/command.cleanAll', GIT_CATEGORY_KEY);
+    export const STASH = Command.toLocalizedCommand({
         id: 'git.stash',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Stash...'
-    };
-    export const APPLY_STASH = {
+    }, 'vscode.git/package/command.stash', GIT_CATEGORY_KEY);
+    export const APPLY_STASH = Command.toLocalizedCommand({
         id: 'git.stash.apply',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Apply Stash...'
-    };
-    export const APPLY_LATEST_STASH = {
+    }, 'vscode.git/package/command.stashApply', GIT_CATEGORY_KEY);
+    export const APPLY_LATEST_STASH = Command.toLocalizedCommand({
         id: 'git.stash.apply.latest',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Apply Latest Stash'
-    };
-    export const POP_STASH = {
+    }, 'vscode.git/package/command.stashApplyLatest', GIT_CATEGORY_KEY);
+    export const POP_STASH = Command.toLocalizedCommand({
         id: 'git.stash.pop',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Pop Stash...'
-    };
-    export const POP_LATEST_STASH = {
+    }, 'vscode.git/package/command.stashPop', GIT_CATEGORY_KEY);
+    export const POP_LATEST_STASH = Command.toLocalizedCommand({
         id: 'git.stash.pop.latest',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Pop Latest Stash'
-    };
-    export const DROP_STASH = {
+    }, 'vscode.git/package/command.stashPopLatest', GIT_CATEGORY_KEY);
+    export const DROP_STASH = Command.toLocalizedCommand({
         id: 'git.stash.drop',
-        category: 'Git',
+        category: GIT_CATEGORY,
         label: 'Drop Stash...'
-    };
-    export const REFRESH = {
+    }, 'vscode.git/package/command.stashDrop', GIT_CATEGORY_KEY);
+    export const REFRESH = Command.toLocalizedCommand({
         id: 'git-refresh',
         label: 'Refresh',
-        iconClass: 'fa fa-refresh',
-        category: 'Git'
-    };
-    export const INIT_REPOSITORY = {
+        category: GIT_CATEGORY,
+        iconClass: codicon('refresh')
+    }, 'vscode.git/package/command.refresh', GIT_CATEGORY_KEY);
+    export const INIT_REPOSITORY = Command.toLocalizedCommand({
         id: 'git-init',
         label: 'Initialize Repository',
-        iconClass: 'fa fa-plus',
-        category: 'Git'
-    };
+        category: GIT_CATEGORY,
+        iconClass: codicon('add')
+    }, 'vscode.git/package/command.init', GIT_CATEGORY_KEY);
 }
 export namespace GIT_MENUS {
     // Top level Groups
@@ -221,22 +254,22 @@ export namespace GIT_MENUS {
 
     export const SUBMENU_COMMIT = {
         group: COMMANDS_GROUP,
-        label: 'Commit',
+        label: nls.localize('vscode.git/package/submenu.commit', 'Commit'),
         menuGroups: ['1_commit'],
     };
     export const SUBMENU_CHANGES = {
         group: COMMANDS_GROUP,
-        label: 'Changes',
+        label: nls.localize('vscode.git/package/submenu.changes', 'Changes'),
         menuGroups: ['1_changes']
     };
     export const SUBMENU_PULL_PUSH = {
         group: COMMANDS_GROUP,
-        label: 'Pull, Push',
+        label: nls.localize('vscode.git/package/submenu.pullpush', 'Pull, Push'),
         menuGroups: ['2_pull', '3_push', '4_fetch']
     };
     export const SUBMENU_STASH = {
         group: COMMANDS_GROUP,
-        label: 'Stash',
+        label: nls.localize('vscode.git/package/submenu.stash', 'Stash'),
         menuGroups: ['1_stash']
     };
 }
@@ -261,6 +294,7 @@ export class GitContribution implements CommandContribution, MenuContribution, T
     @inject(GitPreferences) protected readonly gitPreferences: GitPreferences;
     @inject(DecorationsService) protected readonly decorationsService: DecorationsService;
     @inject(GitDecorationProvider) protected readonly gitDecorationProvider: GitDecorationProvider;
+    @inject(GitWatcher) protected readonly gitWatcher: GitWatcher;
 
     onStart(): void {
         this.updateStatusBar();
@@ -284,15 +318,15 @@ export class GitContribution implements CommandContribution, MenuContribution, T
 
         registerResourceAction('navigation', {
             commandId: GIT_COMMANDS.OPEN_CHANGED_FILE.id,
-            when: 'scmProvider == git && scmResourceGroup == workingTree'
+            when: 'scmProvider == git && scmResourceGroup == workingTree || scmProvider == git && scmResourceGroup == untrackedChanges'
         });
         registerResourceAction('1_modification', {
             commandId: GIT_COMMANDS.DISCARD.id,
-            when: 'scmProvider == git && scmResourceGroup == workingTree'
+            when: 'scmProvider == git && scmResourceGroup == workingTree || scmProvider == git && scmResourceGroup == untrackedChanges'
         });
         registerResourceAction('1_modification', {
             commandId: GIT_COMMANDS.STAGE.id,
-            when: 'scmProvider == git && scmResourceGroup == workingTree'
+            when: 'scmProvider == git && scmResourceGroup == workingTree || scmProvider == git && scmResourceGroup == untrackedChanges'
         });
 
         registerResourceAction('navigation', {
@@ -324,11 +358,11 @@ export class GitContribution implements CommandContribution, MenuContribution, T
 
         registerResourceFolderAction('1_modification', {
             commandId: GIT_COMMANDS.DISCARD.id,
-            when: 'scmProvider == git && scmResourceGroup == workingTree'
+            when: 'scmProvider == git && scmResourceGroup == workingTree || scmProvider == git && scmResourceGroup == untrackedChanges'
         });
         registerResourceFolderAction('1_modification', {
             commandId: GIT_COMMANDS.STAGE.id,
-            when: 'scmProvider == git && scmResourceGroup == workingTree'
+            when: 'scmProvider == git && scmResourceGroup == workingTree || scmProvider == git && scmResourceGroup == untrackedChanges'
         });
 
         registerResourceFolderAction('1_modification', {
@@ -360,11 +394,20 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         });
         registerResourceGroupAction('1_modification', {
             commandId: GIT_COMMANDS.STAGE_ALL.id,
-            when: 'scmProvider == git && scmResourceGroup == workingTree',
+            when: 'scmProvider == git && scmResourceGroup == workingTree || scmProvider == git && scmResourceGroup == untrackedChanges',
         });
         registerResourceGroupAction('1_modification', {
             commandId: GIT_COMMANDS.DISCARD_ALL.id,
-            when: 'scmProvider == git && scmResourceGroup == workingTree',
+            when: 'scmProvider == git && scmResourceGroup == workingTree || scmProvider == git && scmResourceGroup == untrackedChanges',
+        });
+
+        menus.registerMenuAction(SCM_CHANGE_TITLE_MENU, {
+            commandId: GIT_COMMANDS.STAGE_CHANGE.id,
+            when: 'scmProvider == git'
+        });
+        menus.registerMenuAction(SCM_CHANGE_TITLE_MENU, {
+            commandId: GIT_COMMANDS.REVERT_CHANGE.id,
+            when: 'scmProvider == git'
         });
     }
 
@@ -416,9 +459,28 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         registry.registerCommand(GIT_COMMANDS.STAGE_ALL, {
             execute: () => {
                 const provider = this.repositoryProvider.selectedScmProvider;
-                return provider && this.withProgress(() => provider.stageAll());
+                if (provider) {
+                    if (this.gitPreferences['git.untrackedChanges'] === 'mixed') {
+                        return this.withProgress(() => provider.stageAll());
+                    } else {
+                        const toStage = provider.unstagedChanges.concat(provider.mergeChanges)
+                            .filter(change => change.status !== GitFileStatus.New)
+                            .map(change => change.uri.toString());
+                        return this.withProgress(() => provider.stage(toStage));
+                    }
+                }
+
             },
-            isEnabled: () => !!this.repositoryProvider.selectedScmProvider
+            isEnabled: () => {
+                const provider = this.repositoryProvider.selectedScmProvider;
+                if (!provider) { return false; }
+                if (this.gitPreferences['git.untrackedChanges'] === 'mixed') {
+                    return Boolean(provider.unstagedChanges.length || provider.mergeChanges.length);
+                } else {
+                    const isNotUntracked = (change: GitFileChange) => change.status !== GitFileStatus.New;
+                    return Boolean(provider.unstagedChanges.filter(isNotUntracked).length || provider.mergeChanges.filter(isNotUntracked).length);
+                }
+            }
         });
         registry.registerCommand(GIT_COMMANDS.UNSTAGE_ALL, {
             execute: () => {
@@ -535,6 +597,14 @@ export class GitContribution implements CommandContribution, MenuContribution, T
             isEnabled: widget => this.workspaceService.opened && (!widget || widget instanceof ScmWidget) && !this.repositoryProvider.selectedRepository,
             isVisible: widget => this.workspaceService.opened && (!widget || widget instanceof ScmWidget) && !this.repositoryProvider.selectedRepository
         });
+        registry.registerCommand(GIT_COMMANDS.STAGE_CHANGE, {
+            execute: (widget: DirtyDiffWidget) => this.withProgress(() => this.stageChange(widget)),
+            isEnabled: widget => widget instanceof DirtyDiffWidget
+        });
+        registry.registerCommand(GIT_COMMANDS.REVERT_CHANGE, {
+            execute: (widget: DirtyDiffWidget) => this.withProgress(() => this.revertChange(widget)),
+            isEnabled: widget => widget instanceof DirtyDiffWidget
+        });
     }
     async amend(): Promise<void> {
         {
@@ -548,7 +618,7 @@ export class GitContribution implements CommandContribution, MenuContribution, T
                 if (lastCommit === undefined) {
                     scmRepository.input.issue = {
                         type: ScmInputIssueType.Error,
-                        message: 'No previous commit to amend'
+                        message: nls.localize('theia/git/noPreviousCommit', 'No previous commit to amend')
                     };
                     scmRepository.input.focus();
                     return;
@@ -620,7 +690,7 @@ export class GitContribution implements CommandContribution, MenuContribution, T
             registerItem({
                 id: command.id + '_fav',
                 command: command.id,
-                tooltip: command.label.slice('Git: '.length),
+                tooltip: command.label,
                 group: GIT_MENUS.FAV_GROUP,
                 priority: 100 - index
             })
@@ -629,20 +699,20 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         registerItem({
             id: GIT_COMMANDS.COMMIT_AMEND.id,
             command: GIT_COMMANDS.COMMIT_AMEND.id,
-            tooltip: 'Commit (Amend)',
+            tooltip: nls.localize('vscode.git/package/command.commitStagedAmend', 'Commit (Amend)'),
             group: this.asSubMenuItemOf(GIT_MENUS.SUBMENU_COMMIT)
         });
         registerItem({
             id: GIT_COMMANDS.COMMIT_SIGN_OFF.id,
             command: GIT_COMMANDS.COMMIT_SIGN_OFF.id,
-            tooltip: 'Commit (Signed Off)',
+            tooltip: nls.localize('vscode.git/package/command.commitStagedSigned', 'Commit (Signed Off)'),
             group: this.asSubMenuItemOf(GIT_MENUS.SUBMENU_COMMIT)
         });
         [GIT_COMMANDS.PULL_DEFAULT, GIT_COMMANDS.PULL].forEach(command =>
             registerItem({
                 id: command.id,
                 command: command.id,
-                tooltip: command.label.slice('Git: '.length),
+                tooltip: command.label,
                 group: this.asSubMenuItemOf(GIT_MENUS.SUBMENU_PULL_PUSH)
             })
         );
@@ -650,14 +720,14 @@ export class GitContribution implements CommandContribution, MenuContribution, T
             registerItem({
                 id: command.id,
                 command: command.id,
-                tooltip: command.label.slice('Git: '.length),
+                tooltip: command.label,
                 group: this.asSubMenuItemOf(GIT_MENUS.SUBMENU_PULL_PUSH, 1)
             })
         );
         registerItem({
             id: GIT_COMMANDS.FETCH.id,
             command: GIT_COMMANDS.FETCH.id,
-            tooltip: GIT_COMMANDS.FETCH.label.slice('Git: '.length),
+            tooltip: GIT_COMMANDS.FETCH.label,
             group: this.asSubMenuItemOf(GIT_MENUS.SUBMENU_PULL_PUSH, 2)
         });
 
@@ -677,28 +747,28 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         registerItem({
             id: GIT_COMMANDS.STAGE_ALL.id,
             command: GIT_COMMANDS.STAGE_ALL.id,
-            tooltip: 'Stage All Changes',
+            tooltip: GIT_COMMANDS.STAGE_ALL.label,
             group: this.asSubMenuItemOf(GIT_MENUS.SUBMENU_CHANGES),
             priority: 30
         });
         registerItem({
             id: GIT_COMMANDS.UNSTAGE_ALL.id,
             command: GIT_COMMANDS.UNSTAGE_ALL.id,
-            tooltip: 'Unstage All Changes',
+            tooltip: GIT_COMMANDS.UNSTAGE_ALL.label,
             group: this.asSubMenuItemOf(GIT_MENUS.SUBMENU_CHANGES),
             priority: 20
         });
         registerItem({
             id: GIT_COMMANDS.DISCARD_ALL.id,
             command: GIT_COMMANDS.DISCARD_ALL.id,
-            tooltip: 'Discard All Changes',
+            tooltip: GIT_COMMANDS.DISCARD_ALL.label,
             group: this.asSubMenuItemOf(GIT_MENUS.SUBMENU_CHANGES),
             priority: 10
         });
         registerItem({
             id: GIT_COMMANDS.MERGE.id,
             command: GIT_COMMANDS.MERGE.id,
-            tooltip: GIT_COMMANDS.MERGE.label.slice('Git: '.length),
+            tooltip: GIT_COMMANDS.MERGE.label,
             group: GIT_MENUS.COMMANDS_GROUP
         });
     }
@@ -790,7 +860,7 @@ export class GitContribution implements CommandContribution, MenuContribution, T
             + (scmProvider.mergeChanges.length > 0 ? '!' : '');
         return {
             command: GIT_COMMANDS.CHECKOUT.id,
-            title: `$(code-fork) ${branch}${changes}`,
+            title: `$(codicon-source-control) ${branch}${changes}`,
             tooltip: `${branch}${changes}`
         };
     }
@@ -801,22 +871,22 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         }
         if (this.syncService.isSyncing()) {
             return {
-                title: '$(refresh~spin)',
-                tooltip: 'Synchronizing Changes...'
+                title: '$(codicon-sync~spin)',
+                tooltip: nls.localize('vscode.git/statusbar/syncing changes', 'Synchronizing Changes...')
             };
         }
         const { upstreamBranch, aheadBehind } = status;
         if (upstreamBranch) {
             return {
-                title: '$(refresh)' + (aheadBehind && (aheadBehind.ahead + aheadBehind.behind) > 0 ? ` ${aheadBehind.behind}↓ ${aheadBehind.ahead}↑` : ''),
+                title: '$(codicon-sync)' + (aheadBehind && (aheadBehind.ahead + aheadBehind.behind) > 0 ? ` ${aheadBehind.behind}↓ ${aheadBehind.ahead}↑` : ''),
                 command: GIT_COMMANDS.SYNC.id,
-                tooltip: 'Synchronize Changes'
+                tooltip: nls.localize('vscode.git/repository/sync changes', 'Synchronize Changes')
             };
         }
         return {
-            title: '$(cloud-upload)',
+            title: '$(codicon-cloud-upload)',
             command: GIT_COMMANDS.PUBLISH.id,
-            tooltip: 'Publish Changes'
+            tooltip: nls.localize('vscode.git/statusbar/publish changes', 'Publish Changes')
         };
     }
 
@@ -829,7 +899,7 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         if (!message.trim()) {
             scmRepository.input.issue = {
                 type: ScmInputIssueType.Error,
-                message: 'Please provide a commit message'
+                message: nls.localize('vscode.git/repository/commitMessageWhitespacesOnlyWarning', 'Please provide a commit message')
             };
             scmRepository.input.focus();
             return;
@@ -837,7 +907,7 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         if (!scmRepository.provider.stagedChanges.length) {
             scmRepository.input.issue = {
                 type: ScmInputIssueType.Error,
-                message: 'No changes added to commit'
+                message: nls.localize('vscode.git/commands/no changes', 'No changes added to commit')
             };
             scmRepository.input.focus();
             return;
@@ -870,7 +940,7 @@ export class GitContribution implements CommandContribution, MenuContribution, T
             const signOff = `\n\nSigned-off-by: ${username} <${email}>`;
             const value = scmRepository.input.value;
             if (value.endsWith(signOff)) {
-                scmRepository.input.value = value.substr(0, value.length - signOff.length);
+                scmRepository.input.value = value.substring(0, value.length - signOff.length);
             } else {
                 scmRepository.input.value = `${value}${signOff}`;
             }
@@ -878,10 +948,66 @@ export class GitContribution implements CommandContribution, MenuContribution, T
         } catch (e) {
             scmRepository.input.issue = {
                 type: ScmInputIssueType.Warning,
-                message: 'Make sure you configure your \'user.name\' and \'user.email\' in git.'
+                message: nls.localize('theia/git/missingUserInfo', 'Make sure you configure your \'user.name\' and \'user.email\' in git.')
             };
         }
 
+    }
+
+    async stageChange(widget: DirtyDiffWidget): Promise<void> {
+        const scmRepository = this.repositoryProvider.selectedScmRepository;
+        if (!scmRepository) {
+            return;
+        }
+
+        const repository = scmRepository.provider.repository;
+
+        const path = Repository.relativePath(repository, widget.uri)?.toString();
+        if (!path) {
+            return;
+        }
+
+        const { currentChange } = widget;
+        if (!currentChange) {
+            return;
+        }
+
+        const dataToStage = await widget.getContentWithSelectedChanges(change => change === currentChange);
+
+        try {
+            const hash = (await this.git.exec(repository, ['hash-object', '--stdin', '-w', '--path', path], { stdin: dataToStage, stdinEncoding: 'utf8' })).stdout.trim();
+
+            let mode = (await this.git.exec(repository, ['ls-files', '--format=%(objectmode)', '--', path])).stdout.split('\n').filter(line => !!line.trim())[0];
+            if (!mode) {
+                mode = '100644'; // regular non-executable file
+            }
+
+            await this.git.exec(repository, ['update-index', '--add', '--cacheinfo', mode, hash, path]);
+
+            // enforce a notification as there would be no status update if the file had been staged already
+            this.gitWatcher.onGitChanged({ source: repository, status: await this.git.status(repository) });
+        } catch (error) {
+            this.gitErrorHandler.handleError(error);
+        }
+
+        widget.editor.cursor = LineRange.getStartPosition(currentChange.currentRange);
+    }
+
+    async revertChange(widget: DirtyDiffWidget): Promise<void> {
+        const { currentChange } = widget;
+        if (!currentChange) {
+            return;
+        }
+
+        const editor = widget.editor.getControl();
+        editor.pushUndoStop();
+        editor.executeEdits('Revert Change', [{
+            range: editor.getModel()!.getFullModelRange(),
+            text: await widget.getContentWithSelectedChanges(change => change !== currentChange)
+        }]);
+        editor.pushUndoStop();
+
+        widget.editor.cursor = LineRange.getStartPosition(currentChange.currentRange);
     }
 
     /**
@@ -889,68 +1015,73 @@ export class GitContribution implements CommandContribution, MenuContribution, T
      */
     registerColors(colors: ColorRegistry): void {
         colors.register({
-            'id': 'gitDecoration.addedResourceForeground',
-            'description': 'Color for added resources.',
-            'defaults': {
-                'light': '#587c0c',
-                'dark': '#81b88b',
-                'hc': '#1b5225'
+            id: 'gitDecoration.addedResourceForeground',
+            description: 'Color for added resources.',
+            defaults: {
+                light: '#587c0c',
+                dark: '#81b88b',
+                hcDark: '#a1e3ad',
+                hcLight: '#374e06'
             }
         }, {
-            'id': 'gitDecoration.modifiedResourceForeground',
-            'description': 'Color for modified resources.',
-            'defaults': {
-                'light': '#895503',
-                'dark': '#E2C08D',
-                'hc': '#E2C08D'
+            id: 'gitDecoration.modifiedResourceForeground',
+            description: 'Color for modified resources.',
+            defaults: {
+                light: '#895503',
+                dark: '#E2C08D',
+                hcDark: '#E2C08D',
+                hcLight: '#895503'
             }
         }, {
-            'id': 'gitDecoration.deletedResourceForeground',
-            'description': 'Color for deleted resources.',
-            'defaults': {
-                'light': '#ad0707',
-                'dark': '#c74e39',
-                'hc': '#c74e39'
+            id: 'gitDecoration.deletedResourceForeground',
+            description: 'Color for deleted resources.',
+            defaults: {
+                light: '#ad0707',
+                dark: '#c74e39',
+                hcDark: '#c74e39',
+                hcLight: '#ad0707'
             }
         }, {
-            'id': 'gitDecoration.untrackedResourceForeground',
-            'description': 'Color for untracked resources.',
-            'defaults': {
-                'light': '#007100',
-                'dark': '#73C991',
-                'hc': '#73C991'
+            id: 'gitDecoration.untrackedResourceForeground',
+            description: 'Color for untracked resources.',
+            defaults: {
+                light: '#007100',
+                dark: '#73C991',
+                hcDark: '#73C991',
+                hcLight: '#007100'
             }
         }, {
-            'id': 'gitDecoration.conflictingResourceForeground',
-            'description': 'Color for resources with conflicts.',
-            'defaults': {
-                'light': '#6c6cc4',
-                'dark': '#6c6cc4',
-                'hc': '#6c6cc4'
+            id: 'gitDecoration.conflictingResourceForeground',
+            description: 'Color for resources with conflicts.',
+            defaults: {
+                light: '#6c6cc4',
+                dark: '#6c6cc4',
+                hcDark: '#c74e39',
+                hcLight: '#ad0707'
             }
         }, {
-            'id': 'gitlens.gutterBackgroundColor',
-            'description': 'Specifies the background color of the gutter blame annotations',
-            'defaults': {
-                'dark': '#FFFFFF13',
-                'light': '#0000000C',
-                'hc': '#FFFFFF13'
+            id: 'gitlens.gutterBackgroundColor',
+            description: 'Specifies the background color of the gutter blame annotations',
+            defaults: {
+                dark: '#FFFFFF13',
+                light: '#0000000C',
+                hcDark: '#FFFFFF13'
             }
         }, {
-            'id': 'gitlens.gutterForegroundColor',
-            'description': 'Specifies the foreground color of the gutter blame annotations',
-            'defaults': {
-                'dark': '#BEBEBE',
-                'light': '#747474',
-                'hc': '#BEBEBE'
+            id: 'gitlens.gutterForegroundColor',
+            description: 'Specifies the foreground color of the gutter blame annotations',
+            defaults: {
+                dark: '#BEBEBE',
+                light: '#747474',
+                hcDark: '#BEBEBE'
             }
         }, {
-            'id': 'gitlens.lineHighlightBackgroundColor',
-            'description': 'Specifies the background color of the associated line highlights in blame annotations',
-            'defaults': {
-                'dark': '#00BCF233',
-                'light': '#00BCF233',
-                'hc': '#00BCF233'
+            id: 'gitlens.lineHighlightBackgroundColor',
+            description: 'Specifies the background color of the associated line highlights in blame annotations',
+            defaults: {
+                dark: '#00BCF233',
+                light: '#00BCF233',
+                hcDark: '#00BCF233'
             }
         });
     }

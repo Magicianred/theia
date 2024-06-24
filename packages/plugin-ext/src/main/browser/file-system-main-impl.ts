@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2020 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -27,7 +27,7 @@ import { URI } from '@theia/core/shared/vscode-uri';
 import { interfaces } from '@theia/core/shared/inversify';
 import CoreURI from '@theia/core/lib/common/uri';
 import { BinaryBuffer } from '@theia/core/lib/common/buffer';
-import { Disposable } from '@theia/core/lib/common/disposable';
+import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
 import { Event, Emitter } from '@theia/core/lib/common/event';
 import { MAIN_RPC_CONTEXT, FileSystemMain, FileSystemExt, IFileChangeDto } from '../../common/plugin-api-rpc';
 import { RPCProtocol } from '../../common/rpc-protocol';
@@ -35,9 +35,10 @@ import { UriComponents } from '../../common/uri-components';
 import {
     FileSystemProviderCapabilities, Stat, FileType, FileSystemProviderErrorCode, FileOverwriteOptions, FileDeleteOptions, FileOpenOptions, FileWriteOptions, WatchOptions,
     FileSystemProviderWithFileReadWriteCapability, FileSystemProviderWithOpenReadWriteCloseCapability, FileSystemProviderWithFileFolderCopyCapability,
-    FileStat, FileChange, FileOperationError, FileOperationResult
+    FileStat, FileChange, FileOperationError, FileOperationResult, ReadOnlyMessageFileSystemProvider
 } from '@theia/filesystem/lib/common/files';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
+import { MarkdownString } from '../../common/plugin-api-rpc-model';
 
 type IDisposable = Disposable;
 
@@ -46,19 +47,28 @@ export class FileSystemMainImpl implements FileSystemMain, Disposable {
     private readonly _proxy: FileSystemExt;
     private readonly _fileProvider = new Map<number, RemoteFileSystemProvider>();
     private readonly _fileService: FileService;
+    private readonly _disposables = new DisposableCollection();
 
     constructor(rpc: RPCProtocol, container: interfaces.Container) {
         this._proxy = rpc.getProxy(MAIN_RPC_CONTEXT.FILE_SYSTEM_EXT);
         this._fileService = container.get(FileService);
+
+        for (const { scheme, capabilities } of this._fileService.listCapabilities()) {
+            this._proxy.$acceptProviderInfos(scheme, capabilities);
+        }
+
+        this._disposables.push(this._fileService.onDidChangeFileSystemProviderRegistrations(e => this._proxy.$acceptProviderInfos(e.scheme, e.provider?.capabilities)));
+        this._disposables.push(this._fileService.onDidChangeFileSystemProviderCapabilities(e => this._proxy.$acceptProviderInfos(e.scheme, e.provider.capabilities)));
+        this._disposables.push(Disposable.create(() => this._fileProvider.forEach(value => value.dispose())));
+        this._disposables.push(Disposable.create(() => this._fileProvider.clear()));
     }
 
     dispose(): void {
-        this._fileProvider.forEach(value => value.dispose());
-        this._fileProvider.clear();
+        this._disposables.dispose();
     }
 
-    $registerFileSystemProvider(handle: number, scheme: string, capabilities: FileSystemProviderCapabilities): void {
-        this._fileProvider.set(handle, new RemoteFileSystemProvider(this._fileService, scheme, capabilities, handle, this._proxy));
+    $registerFileSystemProvider(handle: number, scheme: string, capabilities: FileSystemProviderCapabilities, readonlyMessage?: MarkdownString): void {
+        this._fileProvider.set(handle, new RemoteFileSystemProvider(this._fileService, scheme, capabilities, handle, this._proxy, readonlyMessage));
     }
 
     $unregisterProvider(handle: number): void {
@@ -123,7 +133,7 @@ export class FileSystemMainImpl implements FileSystemMain, Disposable {
     }
 
     $mkdir(uri: UriComponents): Promise<void> {
-        return this._fileService.createFolder(new CoreURI(URI.revive(uri)))
+        return this._fileService.createFolder(new CoreURI(URI.revive(uri)), { fromUserGesture: false })
             .then(() => undefined).catch(FileSystemMainImpl._handleError);
     }
 
@@ -154,7 +164,7 @@ export class FileSystemMainImpl implements FileSystemMain, Disposable {
 
 }
 
-class RemoteFileSystemProvider implements FileSystemProviderWithFileReadWriteCapability, FileSystemProviderWithOpenReadWriteCloseCapability, FileSystemProviderWithFileFolderCopyCapability {
+class RemoteFileSystemProvider implements FileSystemProviderWithFileReadWriteCapability, FileSystemProviderWithOpenReadWriteCloseCapability, FileSystemProviderWithFileFolderCopyCapability, ReadOnlyMessageFileSystemProvider {
 
     private readonly _onDidChange = new Emitter<readonly FileChange[]>();
     private readonly _registration: IDisposable;
@@ -165,12 +175,15 @@ class RemoteFileSystemProvider implements FileSystemProviderWithFileReadWriteCap
     readonly capabilities: FileSystemProviderCapabilities;
     readonly onDidChangeCapabilities: Event<void> = Event.None;
 
+    readonly onDidChangeReadOnlyMessage: Event<MarkdownString | undefined> = Event.None;
+
     constructor(
         fileService: FileService,
         scheme: string,
         capabilities: FileSystemProviderCapabilities,
         private readonly _handle: number,
-        private readonly _proxy: FileSystemExt
+        private readonly _proxy: FileSystemExt,
+        public readonly readOnlyMessage: MarkdownString | undefined = undefined
     ) {
         this.capabilities = capabilities;
         this._registration = fileService.registerProvider(scheme, this);

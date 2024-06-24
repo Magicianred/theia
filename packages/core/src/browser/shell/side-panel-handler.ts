@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable, inject } from 'inversify';
 import { find, map, toArray, some } from '@phosphor/algorithm';
@@ -21,7 +21,7 @@ import { MimeData } from '@phosphor/coreutils';
 import { Drag } from '@phosphor/dragdrop';
 import { AttachedProperty } from '@phosphor/properties';
 import { TabBarRendererFactory, TabBarRenderer, SHELL_TABBAR_CONTEXT_MENU, SideTabBar } from './tab-bars';
-import { SidebarBottomMenuWidget, SidebarBottomMenuWidgetFactory, SidebarBottomMenu } from './sidebar-bottom-menu-widget';
+import { SidebarMenuWidget, SidebarMenu, SidebarBottomMenuWidgetFactory, SidebarTopMenuWidgetFactory } from './sidebar-menu-widget';
 import { SplitPositionHandler, SplitPositionOptions } from './split-panels';
 import { animationFrame } from '../browser';
 import { FrontendApplicationStateService } from '../frontend-application-state';
@@ -31,6 +31,10 @@ import { TabBarToolbarRegistry, TabBarToolbarFactory, TabBarToolbar } from './ta
 import { DisposableCollection, Disposable } from '../../common/disposable';
 import { ContextMenuRenderer } from '../context-menu-renderer';
 import { MenuPath } from '../../common/menu';
+import { SidebarBottomMenuWidget } from './sidebar-bottom-menu-widget';
+import { SidebarTopMenuWidget } from './sidebar-top-menu-widget';
+import { PINNED_CLASS } from '../widgets';
+import { AdditionalViewsMenuWidget, AdditionalViewsMenuWidgetFactory } from './additional-views-menu-widget';
 
 /** The class name added to the left and right area panels. */
 export const LEFT_RIGHT_AREA_CLASS = 'theia-app-sides';
@@ -66,11 +70,22 @@ export class SidePanelHandler {
      */
     tabBar: SideTabBar;
     /**
+     * Conditional menu placed below the tabBar. Manages overflowing/hidden tabs.
+     * Is only visible if there are overflowing tabs.
+     */
+    additionalViewsMenu: AdditionalViewsMenuWidget;
+    /**
+     * The menu placed on the sidebar top.
+     * Displayed as icons.
+     * Open menus when on clicks.
+     */
+    topMenu: SidebarMenuWidget;
+    /**
      * The menu placed on the sidebar bottom.
      * Displayed as icons.
      * Open menus when on clicks.
      */
-    bottomMenu: SidebarBottomMenuWidget;
+    bottomMenu: SidebarMenuWidget;
     /**
      * A tool bar, which displays a title and widget specific command buttons.
      */
@@ -107,9 +122,12 @@ export class SidePanelHandler {
     @inject(TabBarToolbarRegistry) protected tabBarToolBarRegistry: TabBarToolbarRegistry;
     @inject(TabBarToolbarFactory) protected tabBarToolBarFactory: () => TabBarToolbar;
     @inject(TabBarRendererFactory) protected tabBarRendererFactory: () => TabBarRenderer;
+    @inject(SidebarTopMenuWidgetFactory) protected sidebarTopWidgetFactory: () => SidebarTopMenuWidget;
     @inject(SidebarBottomMenuWidgetFactory) protected sidebarBottomWidgetFactory: () => SidebarBottomMenuWidget;
+    @inject(AdditionalViewsMenuWidgetFactory) protected additionalViewsMenuFactory: AdditionalViewsMenuWidgetFactory;
     @inject(SplitPositionHandler) protected splitPositionHandler: SplitPositionHandler;
     @inject(FrontendApplicationStateService) protected readonly applicationStateService: FrontendApplicationStateService;
+    @inject(TheiaDockPanel.Factory) protected readonly dockPanelFactory: TheiaDockPanel.Factory;
 
     @inject(ContextMenuRenderer)
     protected readonly contextMenuRenderer: ContextMenuRenderer;
@@ -120,7 +138,9 @@ export class SidePanelHandler {
     create(side: 'left' | 'right', options: SidePanel.Options): void {
         this.side = side;
         this.options = options;
+        this.topMenu = this.createSidebarTopMenu();
         this.tabBar = this.createSideBar();
+        this.additionalViewsMenu = this.createAdditionalViewsWidget();
         this.bottomMenu = this.createSidebarBottomMenu();
         this.toolBar = this.createToolbar();
         this.dockPanel = this.createSidePanel();
@@ -163,11 +183,12 @@ export class SidePanelHandler {
         sideBar.collapseRequested.connect(() => this.collapse(), this);
         sideBar.currentChanged.connect(this.onCurrentTabChanged, this);
         sideBar.tabDetachRequested.connect(this.onTabDetachRequested, this);
+        sideBar.tabsOverflowChanged.connect(this.onTabsOverflowChanged, this);
         return sideBar;
     }
 
     protected createSidePanel(): TheiaDockPanel {
-        const sidePanel = new TheiaDockPanel({
+        const sidePanel = this.dockPanelFactory({
             mode: 'single-document'
         });
         sidePanel.id = 'theia-' + this.side + '-side-panel';
@@ -187,10 +208,25 @@ export class SidePanelHandler {
         return toolbar;
     }
 
+    protected createAdditionalViewsWidget(): AdditionalViewsMenuWidget {
+        const widget = this.additionalViewsMenuFactory(this.side);
+        widget.addClass('theia-sidebar-menu');
+        widget.addClass('theia-additional-views-menu');
+        return widget;
+    }
+
+    protected createSidebarTopMenu(): SidebarTopMenuWidget {
+        return this.createSidebarMenu(this.sidebarTopWidgetFactory);
+    }
+
     protected createSidebarBottomMenu(): SidebarBottomMenuWidget {
-        const bottomMenu = this.sidebarBottomWidgetFactory();
-        bottomMenu.addClass('theia-sidebar-bottom-menu');
-        return bottomMenu;
+        return this.createSidebarMenu(this.sidebarBottomWidgetFactory);
+    }
+
+    protected createSidebarMenu<T extends SidebarMenuWidget>(factory: () => T): T {
+        const menu = factory();
+        menu.addClass('theia-sidebar-menu');
+        return menu;
     }
 
     protected showContextMenu(e: MouseEvent): void {
@@ -232,7 +268,9 @@ export class SidePanelHandler {
         const sidebarContainerLayout = new PanelLayout();
         const sidebarContainer = new Panel({ layout: sidebarContainerLayout });
         sidebarContainer.addClass('theia-app-sidebar-container');
+        sidebarContainerLayout.addWidget(this.topMenu);
         sidebarContainerLayout.addWidget(this.tabBar);
+        sidebarContainerLayout.addWidget(this.additionalViewsMenu);
         sidebarContainerLayout.addWidget(this.bottomMenu);
 
         BoxPanel.setStretch(sidebarContainer, 0);
@@ -253,7 +291,8 @@ export class SidePanelHandler {
         const items = toArray(map(this.tabBar.titles, title => <SidePanel.WidgetItem>{
             widget: title.owner,
             rank: SidePanelHandler.rankProperty.get(title.owner),
-            expanded: title === currentTitle
+            expanded: title === currentTitle,
+            pinned: title.className.includes(PINNED_CLASS)
         }));
         // eslint-disable-next-line no-null/no-null
         const size = currentTitle !== null ? this.getPanelSize() : this.state.lastPanelSize;
@@ -269,13 +308,17 @@ export class SidePanelHandler {
 
         let currentTitle: Title<Widget> | undefined;
         if (layoutData.items) {
-            for (const { widget, rank, expanded } of layoutData.items) {
+            for (const { widget, rank, expanded, pinned } of layoutData.items) {
                 if (widget) {
                     if (rank) {
                         SidePanelHandler.rankProperty.set(widget, rank);
                     }
                     if (expanded) {
                         currentTitle = widget.title;
+                    }
+                    if (pinned) {
+                        widget.title.className += ` ${PINNED_CLASS}`;
+                        widget.title.closable = false;
                     }
                     // Add the widgets directly to the tab bar in the same order as they are stored
                     this.tabBar.addTab(widget.title);
@@ -386,11 +429,29 @@ export class SidePanelHandler {
     }
 
     /**
+     * Add a menu to the sidebar top.
+     *
+     * If the menu is already added, it will be ignored.
+     */
+    addTopMenu(menu: SidebarMenu): void {
+        this.topMenu.addMenu(menu);
+    }
+
+    /**
+     * Remove a menu from the sidebar top.
+     *
+     * @param menuId id of the menu to remove
+     */
+    removeTopMenu(menuId: string): void {
+        this.topMenu.removeMenu(menuId);
+    }
+
+    /**
      * Add a menu to the sidebar bottom.
      *
      * If the menu is already added, it will be ignored.
      */
-    addMenu(menu: SidebarBottomMenu): void {
+    addBottomMenu(menu: SidebarMenu): void {
         this.bottomMenu.addMenu(menu);
     }
 
@@ -399,7 +460,7 @@ export class SidePanelHandler {
      *
      * @param menuId id of the menu to remove
      */
-    removeMenu(menuId: string): void {
+    removeBottomMenu(menuId: string): void {
         this.bottomMenu.removeMenu(menuId);
     }
 
@@ -421,6 +482,7 @@ export class SidePanelHandler {
         const currentTitle = tabBar.currentTitle;
         // eslint-disable-next-line no-null/no-null
         const hideDockPanel = currentTitle === null;
+        this.updateSashState(this.container, hideDockPanel);
         let relativeSizes: number[] | undefined;
 
         if (hideDockPanel) {
@@ -591,6 +653,14 @@ export class SidePanelHandler {
         });
     }
 
+    protected onTabsOverflowChanged(sender: SideTabBar, event: { titles: Title<Widget>[], startIndex: number }): void {
+        if (event.startIndex > 0 && event.startIndex <= sender.currentIndex) {
+            sender.revealTab(sender.currentIndex);
+        } else {
+            this.additionalViewsMenu.updateAdditionalViews(sender, event);
+        }
+    }
+
     /*
      * Handle the `widgetAdded` signal from the dock panel. The widget's title is inserted into the
      * tab bar according to the `rankProperty` value that may be attached to the widget.
@@ -620,6 +690,17 @@ export class SidePanelHandler {
     protected onWidgetRemoved(sender: DockPanel, widget: Widget): void {
         this.tabBar.removeTab(widget.title);
         this.refresh();
+    }
+
+    protected updateSashState(sidePanelElement: Panel | null, sidePanelCollapsed: boolean): void {
+        if (sidePanelElement) {
+            // Hide the sash when the left/right side panel is collapsed
+            if (sidePanelElement.id === 'theia-left-content-panel' && sidePanelElement.node.nextElementSibling) {
+                sidePanelElement.node.nextElementSibling.classList.toggle('sash-hidden', sidePanelCollapsed);
+            } else if (sidePanelElement.id === 'theia-right-content-panel' && sidePanelElement.node.previousElementSibling) {
+                sidePanelElement.node.previousElementSibling.classList.toggle('sash-hidden', sidePanelCollapsed);
+            }
+        }
     }
 
 }
@@ -676,6 +757,7 @@ export namespace SidePanel {
         /** Can be undefined in case the widget could not be restored. */
         widget?: Widget;
         expanded?: boolean;
+        pinned?: boolean;
     }
 
     export interface State {

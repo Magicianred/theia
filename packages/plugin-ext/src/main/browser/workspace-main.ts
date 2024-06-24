@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as theia from '@theia/plugin';
 import { interfaces, injectable } from '@theia/core/shared/inversify';
@@ -20,18 +20,18 @@ import { WorkspaceExt, StorageExt, MAIN_RPC_CONTEXT, WorkspaceMain, WorkspaceFol
 import { RPCProtocol } from '../../common/rpc-protocol';
 import { URI as Uri } from '@theia/core/shared/vscode-uri';
 import { UriComponents } from '../../common/uri-components';
-import { QuickOpenModel, QuickOpenItem, QuickOpenMode } from '@theia/core/lib/browser/quick-open/quick-open-model';
-import { MonacoQuickOpenService } from '@theia/monaco/lib/browser/monaco-quick-open-service';
 import { FileSearchService } from '@theia/file-search/lib/common/file-search-service';
 import URI from '@theia/core/lib/common/uri';
-import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { WorkspaceService, WorkspaceTrustService, CanonicalUriService } from '@theia/workspace/lib/browser';
 import { Resource } from '@theia/core/lib/common/resource';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
-import { Emitter, Event, ResourceResolver, CancellationToken } from '@theia/core';
+import { Emitter, Event, ResourceResolver, CancellationToken, isUndefined } from '@theia/core';
 import { PluginServer } from '../../common/plugin-protocol';
 import { FileSystemPreferences } from '@theia/filesystem/lib/browser';
 import { SearchInWorkspaceService } from '@theia/search-in-workspace/lib/browser/search-in-workspace-service';
 import { FileStat } from '@theia/filesystem/lib/common/files';
+import { MonacoQuickInputService } from '@theia/monaco/lib/browser/monaco-quick-input-service';
+import { RequestService } from '@theia/core/shared/@theia/request';
 
 export class WorkspaceMainImpl implements WorkspaceMain, Disposable {
 
@@ -39,7 +39,7 @@ export class WorkspaceMainImpl implements WorkspaceMain, Disposable {
 
     private storageProxy: StorageExt;
 
-    private quickOpenService: MonacoQuickOpenService;
+    private monacoQuickInputService: MonacoQuickInputService;
 
     private fileSearchService: FileSearchService;
 
@@ -51,7 +51,13 @@ export class WorkspaceMainImpl implements WorkspaceMain, Disposable {
 
     private pluginServer: PluginServer;
 
+    private requestService: RequestService;
+
     private workspaceService: WorkspaceService;
+
+    protected readonly canonicalUriService: CanonicalUriService;
+
+    private workspaceTrustService: WorkspaceTrustService;
 
     private fsPreferences: FileSystemPreferences;
 
@@ -59,15 +65,20 @@ export class WorkspaceMainImpl implements WorkspaceMain, Disposable {
 
     protected workspaceSearch: Set<number> = new Set<number>();
 
+    protected readonly canonicalUriProviders = new Map<string, Disposable>();
+
     constructor(rpc: RPCProtocol, container: interfaces.Container) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.WORKSPACE_EXT);
         this.storageProxy = rpc.getProxy(MAIN_RPC_CONTEXT.STORAGE_EXT);
-        this.quickOpenService = container.get(MonacoQuickOpenService);
+        this.monacoQuickInputService = container.get(MonacoQuickInputService);
         this.fileSearchService = container.get(FileSearchService);
         this.searchInWorkspaceService = container.get(SearchInWorkspaceService);
         this.resourceResolver = container.get(TextContentResourceResolver);
         this.pluginServer = container.get(PluginServer);
+        this.requestService = container.get(RequestService);
         this.workspaceService = container.get(WorkspaceService);
+        this.canonicalUriService = container.get(CanonicalUriService);
+        this.workspaceTrustService = container.get(WorkspaceTrustService);
         this.fsPreferences = container.get(FileSystemPreferences);
 
         this.processWorkspaceFoldersChanged(this.workspaceService.tryGetRoots().map(root => root.resource.toString()));
@@ -77,10 +88,16 @@ export class WorkspaceMainImpl implements WorkspaceMain, Disposable {
         this.toDispose.push(this.workspaceService.onWorkspaceLocationChanged(stat => {
             this.proxy.$onWorkspaceLocationChanged(stat);
         }));
+
+        this.workspaceTrustService.getWorkspaceTrust().then(trust => this.proxy.$onWorkspaceTrustChanged(trust));
     }
 
     dispose(): void {
         this.toDispose.dispose();
+    }
+
+    $resolveProxy(url: string): Promise<string | undefined> {
+        return this.requestService.resolveProxy(url);
     }
 
     protected async processWorkspaceFoldersChanged(roots: string[]): Promise<void> {
@@ -127,40 +144,25 @@ export class WorkspaceMainImpl implements WorkspaceMain, Disposable {
             const items = this.roots.map(root => {
                 const rootUri = Uri.parse(root);
                 const rootPathName = rootUri.path.substring(rootUri.path.lastIndexOf('/') + 1);
-                return new QuickOpenItem({
+                return {
                     label: rootPathName,
                     detail: rootUri.path,
-                    run: mode => {
-                        if (mode === QuickOpenMode.OPEN) {
-                            returnValue = {
-                                uri: rootUri,
-                                name: rootPathName,
-                                index: 0
-                            } as theia.WorkspaceFolder;
-                        }
-                        return true;
+                    execute: () => {
+                        returnValue = {
+                            uri: rootUri,
+                            name: rootPathName,
+                            index: 0
+                        } as theia.WorkspaceFolder;
                     }
-                });
+                };
             });
 
-            // Create quick open model
-            const model = {
-                onType(lookFor: string, acceptor: (items: QuickOpenItem[]) => void): void {
-                    acceptor(items);
-                }
-            } as QuickOpenModel;
-
             // Show pick menu
-            this.quickOpenService.open(model, {
-                fuzzyMatchLabel: true,
-                fuzzyMatchDetail: true,
-                fuzzyMatchDescription: true,
-                placeholder: options.placeHolder,
-                onClose: () => {
+            this.monacoQuickInputService.showQuickPick(items, {
+                onDidHide: () => {
                     if (activeElement) {
                         activeElement.focus({ preventScroll: true });
                     }
-
                     resolve(returnValue);
                 }
             });
@@ -285,6 +287,37 @@ export class WorkspaceMainImpl implements WorkspaceMain, Disposable {
         await this.workspaceService.spliceRoots(start, deleteCount, ...rootsToAdd.map(root => new URI(root)));
     }
 
+    async $requestWorkspaceTrust(_options?: theia.WorkspaceTrustRequestOptions): Promise<boolean | undefined> {
+        return this.workspaceTrustService.requestWorkspaceTrust();
+    }
+
+    async $registerCanonicalUriProvider(scheme: string): Promise<void | undefined> {
+        this.canonicalUriProviders.set(scheme,
+            this.canonicalUriService.registerCanonicalUriProvider(scheme, {
+                provideCanonicalUri: async (uri, targetScheme, token) => {
+                    const canonicalUri = await this.proxy.$provideCanonicalUri(uri.toString(), targetScheme, CancellationToken.None);
+                    return isUndefined(uri) ? undefined : new URI(canonicalUri);
+                },
+                dispose: () => {
+                    this.proxy.$disposeCanonicalUriProvider(scheme);
+                },
+            }));
+    }
+
+    $unregisterCanonicalUriProvider(scheme: string): void {
+        const disposable = this.canonicalUriProviders.get(scheme);
+        if (disposable) {
+            this.canonicalUriProviders.delete(scheme);
+            disposable.dispose();
+        } else {
+            console.warn(`No canonical uri provider registered for '${scheme}'`);
+        }
+    }
+
+    async $getCanonicalUri(uri: string, targetScheme: string, token: theia.CancellationToken): Promise<string | undefined> {
+        const canonicalUri = await this.canonicalUriService.provideCanonicalUri(new URI(uri), targetScheme, token);
+        return isUndefined(canonicalUri) ? undefined : canonicalUri.toString();
+    }
 }
 
 /**
@@ -375,12 +408,8 @@ export class TextContentResource implements Resource {
             return content;
         } else {
             const content = await this.proxy.$provideTextDocumentContent(this.uri.toString());
-            if (content) {
-                return content;
-            }
+            return content ?? '';
         }
-
-        return Promise.reject(new Error(`Unable to get content for '${this.uri.toString()}'`));
     }
 
     dispose(): void {

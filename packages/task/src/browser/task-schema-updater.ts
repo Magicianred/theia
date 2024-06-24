@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2019 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2019 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 // This file is inspired by VSCode and partially copied from https://github.com/Microsoft/vscode/blob/1.33.1/src/vs/workbench/contrib/tasks/common/problemMatcher.ts
 // 'problemMatcher.ts' copyright:
 /*---------------------------------------------------------------------------------------------
@@ -20,7 +20,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as Ajv from 'ajv';
+import * as Ajv from '@theia/core/shared/ajv';
 import debounce = require('p-debounce');
 import { postConstruct, injectable, inject } from '@theia/core/shared/inversify';
 import { JsonSchemaContribution, JsonSchemaRegisterContext } from '@theia/core/lib/browser/json-schema-store';
@@ -30,9 +30,10 @@ import { inputsSchema } from '@theia/variable-resolver/lib/browser/variable-inpu
 import URI from '@theia/core/lib/common/uri';
 import { ProblemMatcherRegistry } from './task-problem-matcher-registry';
 import { TaskDefinitionRegistry } from './task-definition-registry';
-import { TaskServer } from '../common';
+import { TaskServer, asVariableName } from '../common';
 import { UserStorageUri } from '@theia/userstorage/lib/browser';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { JSONObject } from '@theia/core/shared/@phosphor/coreutils';
 
 export const taskSchemaId = 'vscode://schemas/tasks';
 
@@ -156,11 +157,11 @@ export class TaskSchemaUpdater implements JsonSchemaContribution {
         customizedDetectedTasks.length = 0;
         const definitions = this.taskDefinitionRegistry.getAll();
         definitions.forEach(def => {
-            const customizedDetectedTask = {
+            const customizedDetectedTask: IJSONSchema = {
                 type: 'object',
                 required: ['type'],
                 properties: {}
-            } as IJSONSchema;
+            };
             const taskType = {
                 ...defaultTaskType,
                 enum: [def.taskType],
@@ -168,8 +169,9 @@ export class TaskSchemaUpdater implements JsonSchemaContribution {
                 description: 'The task type to customize'
             };
             customizedDetectedTask.properties!.type = taskType;
+            const required = def.properties.required || [];
             def.properties.all.forEach(taskProp => {
-                if (!!def.properties.required.find(requiredProp => requiredProp === taskProp)) { // property is mandatory
+                if (required.find(requiredProp => requiredProp === taskProp)) { // property is mandatory
                     customizedDetectedTask.required!.push(taskProp);
                 }
                 customizedDetectedTask.properties![taskProp] = { ...def.properties.schema.properties![taskProp] };
@@ -186,7 +188,7 @@ export class TaskSchemaUpdater implements JsonSchemaContribution {
     }
 
     /** Returns the task's JSON schema */
-    getTaskSchema(): IJSONSchema {
+    getTaskSchema(): IJSONSchema & { default: JSONObject } {
         return {
             type: 'object',
             default: { version: '2.0.0', tasks: [] },
@@ -203,13 +205,15 @@ export class TaskSchemaUpdater implements JsonSchemaContribution {
                 },
                 inputs: inputsSchema.definitions!.inputs
             },
-            additionalProperties: false
+            additionalProperties: false,
+            allowComments: true,
+            allowTrailingCommas: true,
         };
     }
 
     /** Gets the most up-to-date names of problem matchers from the registry and update the task schema */
     private updateProblemMatcherNames(): void {
-        const matcherNames = this.problemMatcherRegistry.getAll().map(m => m.name.startsWith('$') ? m.name : `$${m.name}`);
+        const matcherNames = this.problemMatcherRegistry.getAll().map(m => asVariableName(m.name));
         problemMatcherNames.length = 0;
         problemMatcherNames.push(...matcherNames);
         this.update();
@@ -271,26 +275,32 @@ const commandOptionsSchema: IJSONSchema = {
 const problemMatcherNames: string[] = [];
 const defaultTaskTypes = ['shell', 'process'];
 const supportedTaskTypes = [...defaultTaskTypes];
-const taskLabel = {
+const taskLabel: IJSONSchema = {
     type: 'string',
     description: 'A unique string that identifies the task that is also used as task\'s user interface label'
 };
-const defaultTaskType = {
+const defaultTaskType: IJSONSchema = {
     type: 'string',
     enum: supportedTaskTypes,
     default: defaultTaskTypes[0],
     description: 'Determines what type of process will be used to execute the task. Only shell types will have output shown on the user interface'
-};
+} as const;
 const commandAndArgs = {
     command: commandSchema,
     args: commandArgSchema,
     options: commandOptionsSchema
 };
 
-const group = {
+const group: IJSONSchema = {
     oneOf: [
         {
-            type: 'string'
+            type: 'string',
+            enum: ['build', 'test', 'none'],
+            enumDescriptions: [
+                'Marks the task as a build task accessible through the \'Run Build Task\' command.',
+                'Marks the task as a test task accessible through the \'Run Test Task\' command.',
+                'Assigns the task to no group'
+            ]
         },
         {
             type: 'object',
@@ -298,7 +308,13 @@ const group = {
                 kind: {
                     type: 'string',
                     default: 'none',
-                    description: 'The task\'s execution group.'
+                    description: 'The task\'s execution group.',
+                    enum: ['build', 'test', 'none'],
+                    enumDescriptions: [
+                        'Marks the task as a build task accessible through the \'Run Build Task\' command.',
+                        'Marks the task as a test task accessible through the \'Run Test Task\' command.',
+                        'Assigns the task to no group'
+                    ]
                 },
                 isDefault: {
                     type: 'boolean',
@@ -307,20 +323,6 @@ const group = {
                 }
             }
         }
-    ],
-    enum: [
-        { kind: 'build', isDefault: true },
-        { kind: 'test', isDefault: true },
-        'build',
-        'test',
-        'none'
-    ],
-    enumDescriptions: [
-        'Marks the task as the default build task.',
-        'Marks the task as the default test task.',
-        'Marks the task as a build task accessible through the \'Run Build Task\' command.',
-        'Marks the task as a test task accessible through the \'Run Test Task\' command.',
-        'Assigns the task to no group'
     ],
     // eslint-disable-next-line max-len
     description: 'Defines to which execution group this task belongs to. It supports "build" to add it to the build group and "test" to add it to the test group.'
@@ -524,7 +526,7 @@ const problemMatcherObject: IJSONSchema = {
     }
 };
 
-const problemMatcher = {
+const problemMatcher: IJSONSchema = {
     anyOf: [
         {
             type: 'string',

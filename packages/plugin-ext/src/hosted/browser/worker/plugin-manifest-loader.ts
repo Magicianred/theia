@@ -1,22 +1,22 @@
-/********************************************************************************
- * Copyright (C) 2020 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { PluginModel, PluginPackage } from '../../../common/plugin-protocol';
+import { PluginIdentifiers, PluginModel, PluginPackage } from '../../../common/plugin-protocol';
 import { Endpoint } from '@theia/core/lib/browser/endpoint';
 import URI from '@theia/core/lib/common/uri';
 
@@ -54,7 +54,9 @@ function readContents(uri: string): Promise<string> {
 
 async function readPluginJson(pluginModel: PluginModel, relativePath: string): Promise<any> {
     const content = await readPluginFile(pluginModel, relativePath);
-    return JSON.parse(content);
+    const json = JSON.parse(content) as PluginPackage;
+    json.publisher ??= PluginIdentifiers.UNPUBLISHED;
+    return json;
 }
 
 export async function loadManifest(pluginModel: PluginModel): Promise<any> {
@@ -65,7 +67,7 @@ export async function loadManifest(pluginModel: PluginModel): Promise<any> {
     // translate vscode builtins, as they are published with a prefix.
     const built_prefix = '@theia/vscode-builtin-';
     if (manifest && manifest.name && manifest.name.startsWith(built_prefix)) {
-        manifest.name = manifest.name.substr(built_prefix.length);
+        manifest.name = manifest.name.substring(built_prefix.length);
     }
     return manifest && translations && Object.keys(translations).length ?
         localize(manifest, translations) :

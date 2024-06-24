@@ -1,50 +1,83 @@
-/********************************************************************************
- * Copyright (C) 2018 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 import { RPCProtocol } from './rpc-protocol';
 import { PluginManager, Plugin } from './plugin-api-rpc';
 import { interfaces } from '@theia/core/shared/inversify';
 
 export const ExtPluginApiProvider = 'extPluginApi';
 /**
- * Provider for extension API description
+ * Provider for extension API description.
  */
 export interface ExtPluginApiProvider {
     /**
-     * Provide API description
+     * Provide API description.
      */
     provideApi(): ExtPluginApi;
 }
 
 /**
- * Plugin API extension description.
- * This interface describes scripts for both plugin runtimes: frontend(WebWorker) and backend(NodeJs)
+ * Provider for backend extension API description.
  */
-export interface ExtPluginApi {
+export interface ExtPluginBackendApiProvider {
+    /**
+     * Provide API description.
+     */
+    provideApi(): ExtPluginBackendApi;
+}
+
+/**
+ * Provider for frontend extension API description.
+ */
+export interface ExtPluginFrontendApiProvider {
+    /**
+     * Provide API description.
+     */
+    provideApi(): ExtPluginFrontendApi;
+}
+
+/**
+ * Backend Plugin API extension description.
+ * This interface describes a script for the backend(NodeJs) runtime.
+ */
+export interface ExtPluginBackendApi {
 
     /**
      * Path to the script which should be loaded to provide api, module should export `provideApi` function with
      * [ExtPluginApiBackendInitializationFn](#ExtPluginApiBackendInitializationFn) signature
      */
     backendInitPath?: string;
+}
+
+/**
+ * Frontend Plugin API extension description.
+ * This interface describes a script for the frontend(WebWorker) runtime.
+ */
+export interface ExtPluginFrontendApi {
 
     /**
      * Initialization information for frontend part of Plugin API
      */
     frontendExtApi?: FrontendExtPluginApi;
 }
+
+/**
+ * Plugin API extension description.
+ * This interface describes scripts for both plugin runtimes: frontend(WebWorker) and backend(NodeJs)
+ */
+export interface ExtPluginApi extends ExtPluginBackendApi, ExtPluginFrontendApi { }
 
 export interface ExtPluginApiFrontendInitializationFn {
     (rpc: RPCProtocol, plugins: Map<string, Plugin>): void;

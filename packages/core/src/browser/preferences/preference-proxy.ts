@@ -1,22 +1,22 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { Disposable, Event, MaybePromise } from '../../common';
+import { Disposable, Event, isObject, MaybePromise } from '../../common';
 import { PreferenceService } from './preference-service';
 import { PreferenceSchema } from './preference-contribution';
 import { PreferenceScope } from './preference-scope';
@@ -119,6 +119,7 @@ export interface PreferenceRetrieval<T> {
  * ```
  */
 export type PreferenceProxy<T> = Readonly<T> & Disposable & PreferenceEventEmitter<T> & PreferenceRetrieval<T>;
+export const PreferenceProxyOptions = Symbol('PreferenceProxyOptions');
 /**
  * Proxy configuration parameters.
  */
@@ -146,6 +147,10 @@ export interface PreferenceProxyOptions {
      * When 'deep' or 'both' is given, nested preference proxies can be retrieved.
      */
     style?: 'flat' | 'deep' | 'both';
+    /**
+     * Indicates whether the proxy should be disposable. Proxies that are shared between multiple callers should not be disposable.
+     */
+    isDisposable?: boolean;
 }
 
 /**
@@ -166,6 +171,8 @@ export interface PreferenceProxyOptions {
  * See {@link CorePreferences} for an example.
  *
  * Note that if `schema` is a Promise, most actions will be no-ops until the promise is resolved.
+ *
+ * @deprecated @since 1.23.0 use `PreferenceProxyFactory` instead.
  */
 export function createPreferenceProxy<T>(preferences: PreferenceService, promisedSchema: MaybePromise<PreferenceSchema>, options?: PreferenceProxyOptions): PreferenceProxy<T> {
     const opts = options || {};
@@ -185,16 +192,14 @@ export function createPreferenceProxy<T>(preferences: PreferenceService, promise
                 const e = changes[key];
                 const overridden = preferences.overriddenPreferenceName(e.preferenceName);
                 const preferenceName: any = overridden ? overridden.preferenceName : e.preferenceName;
-                if (preferenceName.startsWith(prefix) && (!overridden || !opts.overrideIdentifier || overridden.overrideIdentifier === opts.overrideIdentifier)) {
+                if (preferenceName.startsWith(prefix) && (!opts.overrideIdentifier || overridden?.overrideIdentifier === opts.overrideIdentifier)) {
                     if (schema.properties[preferenceName]) {
                         const { newValue, oldValue } = e;
                         listener({
                             newValue, oldValue, preferenceName,
                             affects: (resourceUri, overrideIdentifier) => {
-                                if (overrideIdentifier !== undefined) {
-                                    if (overridden && overridden.overrideIdentifier !== overrideIdentifier) {
-                                        return false;
-                                    }
+                                if (overrideIdentifier !== overridden?.overrideIdentifier) {
+                                    return false;
                                 }
                                 return e.affects(resourceUri);
                             }
@@ -223,12 +228,12 @@ export function createPreferenceProxy<T>(preferences: PreferenceService, promise
                 if (p.startsWith(prefix)) {
                     const idx = p.indexOf('.', prefix.length);
                     if (idx !== -1 && isDeep) {
-                        const pre = p.substr(prefix.length, idx - prefix.length);
+                        const pre = p.substring(prefix.length, idx);
                         if (properties.indexOf(pre) === -1) {
                             properties.push(pre);
                         }
                     }
-                    const prop = p.substr(prefix.length);
+                    const prop = p.substring(prefix.length);
                     if (isFlat || prop.indexOf('.') === -1) {
                         properties.push(prop);
                     }
@@ -327,7 +332,7 @@ export function createPreferenceProxy<T>(preferences: PreferenceService, promise
             } while (parentSegment && value === undefined);
 
             let segment;
-            while (typeof value === 'object' && (segment = segments.pop())) {
+            while (isObject(value) && (segment = segments.pop())) {
                 value = value[segment];
             }
             return segments.length ? undefined : value;

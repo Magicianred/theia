@@ -1,25 +1,27 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import * as React from '@theia/core/shared/react';
-import { DebugProtocol } from 'vscode-debugprotocol/lib/debugProtocol';
+import { DebugProtocol } from '@vscode/debugprotocol/lib/debugProtocol';
 import { SingleTextInputDialog } from '@theia/core/lib/browser';
 import { ConsoleItem, CompositeConsoleItem } from '@theia/console/lib/browser/console-session';
 import { DebugSession } from '../debug-session';
 import { Severity } from '@theia/core/lib/common/severity';
+import * as monaco from '@theia/monaco-editor-core';
+import { nls } from '@theia/core';
 
 export type DebugSessionProvider = () => DebugSession | undefined;
 
@@ -137,7 +139,7 @@ export class DebugVariable extends ExpressionContainer {
     constructor(
         session: DebugSessionProvider,
         protected readonly variable: DebugProtocol.Variable,
-        protected readonly parent: ExpressionContainer
+        readonly parent: ExpressionContainer
     ) {
         super({
             session,
@@ -159,7 +161,7 @@ export class DebugVariable extends ExpressionContainer {
         return this._value || this.variable.value;
     }
 
-    render(): React.ReactNode {
+    override render(): React.ReactNode {
         const { type, value, name } = this;
         return <div className={this.variableClassName}>
             <span title={type || name} className='name' ref={this.setNameRef}>{name}{!!value && ': '}</span>
@@ -232,9 +234,13 @@ export class DebugVariable extends ExpressionContainer {
     protected setNameRef = (nameRef: HTMLSpanElement | null) => this.nameRef = nameRef || undefined;
 
     async open(): Promise<void> {
+        if (!this.supportSetVariable) {
+            return;
+        }
         const input = new SingleTextInputDialog({
-            title: `Set ${this.name} Value`,
-            initialValue: this.value
+            title: nls.localize('theia/debug/debugVariableInput', 'Set {0} Value', this.name),
+            initialValue: this.value,
+            placeholder: nls.localizeByDefault('Value')
         });
         const newValue = await input.open();
         if (newValue) {
@@ -252,7 +258,7 @@ export class DebugVirtualVariable extends ExpressionContainer {
         super(options);
     }
 
-    render(): React.ReactNode {
+    override render(): React.ReactNode {
         return this.options.name;
     }
 }
@@ -292,7 +298,7 @@ export class ExpressionItem extends ExpressionContainer {
         return this._expression;
     }
 
-    render(): React.ReactNode {
+    override render(): React.ReactNode {
         const valueClassNames: string[] = [];
         if (!this._available) {
             valueClassNames.push(ConsoleItem.errorClassName);
@@ -355,8 +361,8 @@ export class DebugScope extends ExpressionContainer {
         });
     }
 
-    render(): React.ReactNode {
-        return this.raw.name;
+    override render(): React.ReactNode {
+        return this.name;
     }
 
     get expensive(): boolean {
@@ -369,6 +375,10 @@ export class DebugScope extends ExpressionContainer {
             return new monaco.Range(line, column, endLine, endColumn);
         }
         return undefined;
+    }
+
+    get name(): string {
+        return this.raw.name;
     }
 
 }

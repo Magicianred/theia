@@ -1,20 +1,21 @@
-/********************************************************************************
- * Copyright (C) 2020 Red Hat, Inc. and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 Red Hat, Inc. and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { injectable } from 'inversify';
+import { isThenable } from '../common/promise-util';
 import { CancellationToken, CancellationTokenSource, Disposable, Emitter, Event } from '../common';
 import { TernarySearchTree } from '../common/ternary-search-tree';
 import URI from '../common/uri';
@@ -48,7 +49,7 @@ export interface DecorationsService {
 
     registerDecorationsProvider(provider: DecorationsProvider): Disposable;
 
-    getDecoration(uri: URI, includeChildren: boolean): Decoration [];
+    getDecoration(uri: URI, includeChildren: boolean): Decoration[];
 }
 
 class DecorationDataRequest {
@@ -77,7 +78,7 @@ class DecorationProviderWrapper {
                 this.data.clear();
             } else {
                 for (const uri of uris) {
-                    this.fetchData(new URI(uri.toString()));
+                    this.fetchData(uri);
                     const decoration = await provider.provideDecorations(uri, CancellationToken.None);
                     if (decoration) {
                         this.decorations.set(uri.toString(), decoration);
@@ -130,14 +131,14 @@ class DecorationProviderWrapper {
     private fetchData(uri: URI): Decoration | undefined {
 
         // check for pending request and cancel it
-        const pendingRequest = this.data.get(new URI(uri.toString()));
+        const pendingRequest = this.data.get(uri);
         if (pendingRequest instanceof DecorationDataRequest) {
             pendingRequest.source.cancel();
             this.data.delete(uri);
         }
 
         const source = new CancellationTokenSource();
-        const dataOrThenable = this.provider.provideDecorations(new URI(uri.toString()), source.token);
+        const dataOrThenable = this.provider.provideDecorations(uri, source.token);
         if (!isThenable<Decoration | Promise<Decoration | undefined> | undefined>(dataOrThenable)) {
             // sync -> we have a result now
             return this.keepItem(uri, dataOrThenable);
@@ -156,12 +157,6 @@ class DecorationProviderWrapper {
 
             this.data.set(uri, request);
             return undefined;
-        }
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        function isThenable<T>(obj: any): obj is Promise<T> {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            return obj && typeof (<Promise<any>>obj).then === 'function';
         }
     }
 
@@ -198,11 +193,11 @@ export class DecorationsServiceImpl implements DecorationsService {
         });
     }
 
-    getDecoration(uri: URI, includeChildren: boolean): Decoration [] {
+    getDecoration(uri: URI, includeChildren: boolean): Decoration[] {
         const data: Decoration[] = [];
         let containsChildren: boolean = false;
         for (const wrapper of this.data) {
-            wrapper.getOrRetrieve(new URI(uri.toString()), includeChildren, (deco, isChild) => {
+            wrapper.getOrRetrieve(uri, includeChildren, (deco, isChild) => {
                 if (!isChild || deco.bubble) {
                     data.push(deco);
                     containsChildren = isChild || containsChildren;

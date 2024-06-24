@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, injectable } from '@theia/core/shared/inversify';
 import URI from '@theia/core/lib/common/uri';
@@ -22,6 +22,7 @@ import { SelectionService } from '@theia/core/lib/common/selection-service';
 import { Command, CommandContribution, CommandRegistry } from '@theia/core/lib/common/command';
 import { UriAwareCommandHandler } from '@theia/core/lib/common/uri-command-handler';
 import { FileDownloadService } from './file-download-service';
+import { CommonCommands } from '@theia/core/lib/browser';
 
 @injectable()
 export class FileDownloadCommandContribution implements CommandContribution {
@@ -67,16 +68,16 @@ export class FileDownloadCommandContribution implements CommandContribution {
 
 export namespace FileDownloadCommands {
 
-    export const DOWNLOAD: Command = {
+    export const DOWNLOAD = Command.toDefaultLocalizedCommand({
         id: 'file.download',
-        category: 'File',
+        category: CommonCommands.FILE_CATEGORY,
         label: 'Download'
-    };
+    });
 
-    export const COPY_DOWNLOAD_LINK: Command = {
+    export const COPY_DOWNLOAD_LINK = Command.toLocalizedCommand({
         id: 'file.copyDownloadLink',
-        category: 'File',
+        category: CommonCommands.FILE_CATEGORY,
         label: 'Copy Download Link'
-    };
+    }, 'theia/filesystem/copyDownloadLink', CommonCommands.FILE_CATEGORY_KEY);
 
 }

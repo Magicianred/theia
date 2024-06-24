@@ -1,26 +1,26 @@
-/********************************************************************************
- * Copyright (C) 2018 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { inject, injectable, optional, postConstruct } from 'inversify';
 import { ILogger } from '../common/logger';
 import { Event, Emitter } from '../common/event';
-import { DefaultFrontendApplicationContribution } from './frontend-application';
+import { DefaultFrontendApplicationContribution } from './frontend-application-contribution';
 import { StatusBar, StatusBarAlignment } from './status-bar/status-bar';
-import { WebSocketConnectionProvider } from './messaging/ws-connection-provider';
-import { Disposable, DisposableCollection } from '../common';
+import { Disposable, DisposableCollection, nls } from '../common';
+import { WebSocketConnectionSource } from './messaging/ws-connection-source';
 
 /**
  * Service for listening on backend connection changes.
@@ -83,7 +83,7 @@ export abstract class AbstractConnectionStatusService implements ConnectionStatu
     protected connectionStatus: ConnectionStatus = ConnectionStatus.ONLINE;
 
     @inject(ILogger)
-    protected readonly logger: ILogger;
+    protected logger: ILogger;
 
     constructor(@inject(ConnectionStatusOptions) @optional() protected readonly options: ConnectionStatusOptions = ConnectionStatusOptions.DEFAULT) { }
 
@@ -119,12 +119,8 @@ export class FrontendConnectionStatusService extends AbstractConnectionStatusSer
 
     private scheduledPing: number | undefined;
 
-    @inject(WebSocketConnectionProvider) protected readonly wsConnectionProvider: WebSocketConnectionProvider;
+    @inject(WebSocketConnectionSource) protected readonly wsConnectionProvider: WebSocketConnectionSource;
     @inject(PingService) protected readonly pingService: PingService;
-
-    constructor(@inject(ConnectionStatusOptions) @optional() protected readonly options: ConnectionStatusOptions = ConnectionStatusOptions.DEFAULT) {
-        super(options);
-    }
 
     @postConstruct()
     protected init(): void {
@@ -209,8 +205,8 @@ export class ApplicationConnectionStatusContribution extends DefaultFrontendAppl
     protected handleOffline(): void {
         this.statusBar.setElement(this.statusbarId, {
             alignment: StatusBarAlignment.LEFT,
-            text: 'Offline',
-            tooltip: 'Cannot connect to backend.',
+            text: nls.localize('theia/core/offline', 'Offline'),
+            tooltip: nls.localize('theia/localize/offlineTooltip', 'Cannot connect to backend.'),
             priority: 5000
         });
         this.toDisposeOnOnline.push(Disposable.create(() => this.statusBar.removeElement(this.statusbarId)));

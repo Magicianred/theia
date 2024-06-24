@@ -1,36 +1,42 @@
-/********************************************************************************
- * Copyright (C) 2020 EclipseSource and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 EclipseSource and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 import { Message } from '@theia/core/shared/@phosphor/messaging';
 import { Disposable, SelectionService } from '@theia/core';
-import { BaseWidget, MessageLoop, Widget } from '@theia/core/lib/browser/widgets/widget';
+import { BaseWidget, codicon, MessageLoop, Widget } from '@theia/core/lib/browser/widgets/widget';
 import { DisposableCollection } from '@theia/core/lib/common/disposable';
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { PropertyViewContentWidget } from './property-view-content-widget';
 import { PropertyViewService } from './property-view-service';
+import { nls } from '@theia/core/lib/common/nls';
 
+/**
+ * The main container for the selection-specific property widgets.
+ * Based on the given selection, the registered `PropertyViewWidgetProvider` provides the
+ * content widget that displays the corresponding properties.
+ */
 @injectable()
 export class PropertyViewWidget extends BaseWidget {
 
     static readonly ID = 'property-view';
-    static readonly LABEL = 'Properties';
+    static readonly LABEL = nls.localize('theia/property-view/properties', 'Properties');
 
     protected contentWidget: PropertyViewContentWidget;
 
-    protected toDisposeOnDetach = new DisposableCollection();
+    protected override toDisposeOnDetach = new DisposableCollection();
 
     @inject(PropertyViewService) protected readonly propertyViewService: PropertyViewService;
     @inject(SelectionService) protected readonly selectionService: SelectionService;
@@ -40,7 +46,7 @@ export class PropertyViewWidget extends BaseWidget {
         this.id = PropertyViewWidget.ID;
         this.title.label = PropertyViewWidget.LABEL;
         this.title.caption = PropertyViewWidget.LABEL;
-        this.title.iconClass = 'fa fa-table';
+        this.title.iconClass = codicon('table');
         this.title.closable = true;
 
         this.addClass('theia-property-view-widget');
@@ -90,12 +96,12 @@ export class PropertyViewWidget extends BaseWidget {
         this.update();
     }
 
-    protected onAfterAttach(msg: Message): void {
+    protected override onAfterAttach(msg: Message): void {
         super.onAfterAttach(msg);
         this.initializeContentWidget(this.selectionService.selection);
     }
 
-    protected onActivateRequest(msg: Message): void {
+    protected override onActivateRequest(msg: Message): void {
         super.onActivateRequest(msg);
         this.node.focus();
         if (this.contentWidget) {
@@ -103,7 +109,7 @@ export class PropertyViewWidget extends BaseWidget {
         }
     }
 
-    protected onResize(msg: Widget.ResizeMessage): void {
+    protected override onResize(msg: Widget.ResizeMessage): void {
         super.onResize(msg);
         if (this.contentWidget) {
             MessageLoop.sendMessage(this.contentWidget, msg);

@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2018 Ericsson and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2018 Ericsson and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -20,16 +20,31 @@ import debounce = require('p-debounce');
 import { injectable, inject } from 'inversify';
 import { JSONExt, JSONValue } from '@phosphor/coreutils';
 import URI from '../../common/uri';
-import { Disposable, DisposableCollection, Emitter, Event } from '../../common';
+import { Disposable, DisposableCollection, Emitter, Event, isObject } from '../../common';
 import { Deferred } from '../../common/promise-util';
 import { PreferenceScope } from './preference-scope';
 import { PreferenceLanguageOverrideService } from './preference-language-override-service';
 
 export interface PreferenceProviderDataChange {
+    /**
+     * The name of the changed preference.
+     */
     readonly preferenceName: string;
+    /**
+     * The new value of the changed preference.
+     */
     readonly newValue?: any;
+    /**
+     * The old value of the changed preference.
+     */
     readonly oldValue?: any;
+    /**
+     * The {@link PreferenceScope} of the changed preference.
+     */
     readonly scope: PreferenceScope;
+    /**
+     * URIs of the scopes in which this change applies.
+     */
     readonly domain?: string[];
 }
 
@@ -75,10 +90,6 @@ export abstract class PreferenceProvider implements Disposable {
     }
 
     protected deferredChanges: PreferenceProviderDataChanges | undefined;
-    protected _pendingChanges: Promise<boolean> = Promise.resolve(false);
-    get pendingChanges(): Promise<boolean> {
-        return this._pendingChanges;
-    }
 
     /**
      * Informs the listeners that one or more preferences of this provider are changed.
@@ -94,7 +105,7 @@ export abstract class PreferenceProvider implements Disposable {
                 this.mergePreferenceProviderDataChange(changes[preferenceName]);
             }
         }
-        return this._pendingChanges = this.fireDidPreferencesChanged();
+        return this.fireDidPreferencesChanged();
     }
 
     protected mergePreferenceProviderDataChange(change: PreferenceProviderDataChange): void {
@@ -224,6 +235,9 @@ export abstract class PreferenceProvider implements Disposable {
                 if (JSONExt.isObject(source[key]) && JSONExt.isObject(value)) {
                     this.merge(source[key], value);
                     continue;
+                } else if (JSONExt.isArray(source[key]) && JSONExt.isArray(value)) {
+                    source[key] = [...JSONExt.deepCopy(source[key] as any), ...JSONExt.deepCopy(value)];
+                    continue;
                 }
             }
             source[key] = JSONExt.deepCopy(value);
@@ -231,18 +245,23 @@ export abstract class PreferenceProvider implements Disposable {
         return source;
     }
 
+    /**
+     * Handles deep equality with the possibility of `undefined`
+     */
+    static deepEqual(a: JSONValue | undefined, b: JSONValue | undefined): boolean {
+        if (a === b) { return true; }
+        if (a === undefined || b === undefined) { return false; }
+        return JSONExt.deepEqual(a, b);
+    }
+
     protected getParsedContent(jsonData: any): { [key: string]: any } {
         const preferences: { [key: string]: any } = {};
-        if (typeof jsonData !== 'object') {
+        if (!isObject(jsonData)) {
             return preferences;
         }
-        // eslint-disable-next-line guard-for-in
-        for (const preferenceName in jsonData) {
-            const preferenceValue = jsonData[preferenceName];
+        for (const [preferenceName, preferenceValue] of Object.entries(jsonData)) {
             if (this.preferenceOverrideService.testOverrideValue(preferenceName, preferenceValue)) {
-                // eslint-disable-next-line guard-for-in
-                for (const overriddenPreferenceName in preferenceValue) {
-                    const overriddenValue = preferenceValue[overriddenPreferenceName];
+                for (const [overriddenPreferenceName, overriddenValue] of Object.entries(preferenceValue)) {
                     preferences[`${preferenceName}.${overriddenPreferenceName}`] = overriddenValue;
                 }
             } else {
@@ -250,5 +269,9 @@ export abstract class PreferenceProvider implements Disposable {
             }
         }
         return preferences;
+    }
+
+    canHandleScope(scope: PreferenceScope): boolean {
+        return true;
     }
 }

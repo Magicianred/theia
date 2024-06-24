@@ -1,21 +1,25 @@
 {
   "name": "@theia/plugin-ext-vscode",
-  "version": "1.14.0",
+  "version": "1.50.0",
   "description": "Theia - Plugin Extension for VsCode",
   "dependencies": {
-    "@theia/core": "1.14.0",
-    "@theia/editor": "1.14.0",
-    "@theia/filesystem": "1.14.0",
-    "@theia/monaco": "1.14.0",
-    "@theia/navigator": "1.14.0",
-    "@theia/plugin": "1.14.0",
-    "@theia/plugin-ext": "1.14.0",
-    "@theia/terminal": "1.14.0",
-    "@theia/userstorage": "1.14.0",
-    "@theia/workspace": "1.14.0",
-    "@types/request": "^2.0.3",
+    "@theia/callhierarchy": "1.50.0",
+    "@theia/core": "1.50.0",
+    "@theia/editor": "1.50.0",
+    "@theia/filesystem": "1.50.0",
+    "@theia/monaco": "1.50.0",
+    "@theia/monaco-editor-core": "1.83.101",
+    "@theia/navigator": "1.50.0",
+    "@theia/outline-view": "1.50.0",
+    "@theia/plugin": "1.50.0",
+    "@theia/plugin-ext": "1.50.0",
+    "@theia/terminal": "1.50.0",
+    "@theia/typehierarchy": "1.50.0",
+    "@theia/userstorage": "1.50.0",
+    "@theia/workspace": "1.50.0",
+    "decompress": "^4.2.1",
     "filenamify": "^4.1.0",
-    "request": "^2.82.0"
+    "tslib": "^2.6.2"
   },
   "publishConfig": {
     "access": "public"
@@ -29,7 +33,7 @@
   "keywords": [
     "theia-extension"
   ],
-  "license": "EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0",
+  "license": "EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/eclipse-theia/theia.git"
@@ -43,14 +47,15 @@
     "src"
   ],
   "scripts": {
-    "lint": "theiaext lint",
     "build": "theiaext build",
-    "watch": "theiaext watch",
     "clean": "theiaext clean",
-    "test": "theiaext test"
+    "compile": "theiaext compile",
+    "lint": "theiaext lint",
+    "test": "theiaext test",
+    "watch": "theiaext watch"
   },
   "devDependencies": {
-    "@theia/ext-scripts": "1.14.0"
+    "@theia/ext-scripts": "1.50.0"
   },
   "nyc": {
     "extends": "../../configs/nyc.json"

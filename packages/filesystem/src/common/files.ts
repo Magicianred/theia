@@ -1,18 +1,18 @@
-/********************************************************************************
- * Copyright (C) 2020 TypeFox and others.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
- *
- * This Source Code may also be made available under the following Secondary
- * Licenses when the conditions for such availability set forth in the Eclipse
- * Public License v. 2.0 are satisfied: GNU General Public License, version 2
- * with the GNU Classpath Exception which is available at
- * https://www.gnu.org/software/classpath/license.html.
- *
- * SPDX-License-Identifier: EPL-2.0 OR GPL-2.0 WITH Classpath-exception-2.0
- ********************************************************************************/
+// *****************************************************************************
+// Copyright (C) 2020 TypeFox and others.
+//
+// This program and the accompanying materials are made available under the
+// terms of the Eclipse Public License v. 2.0 which is available at
+// http://www.eclipse.org/legal/epl-2.0.
+//
+// This Source Code may also be made available under the following Secondary
+// Licenses when the conditions for such availability set forth in the Eclipse
+// Public License v. 2.0 are satisfied: GNU General Public License, version 2
+// with the GNU Classpath Exception which is available at
+// https://www.gnu.org/software/classpath/license.html.
+//
+// SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
+// *****************************************************************************
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
@@ -26,6 +26,8 @@ import { BinaryBuffer, BinaryBufferReadableStream } from '@theia/core/lib/common
 import type { TextDocumentContentChangeEvent } from '@theia/core/shared/vscode-languageserver-protocol';
 import { ReadableStreamEvents } from '@theia/core/lib/common/stream';
 import { CancellationToken } from '@theia/core/lib/common/cancellation';
+import { isObject } from '@theia/core/lib/common';
+import { MarkdownString } from '@theia/core/lib/common/markdown-rendering';
 
 export const enum FileOperation {
     CREATE,
@@ -95,10 +97,10 @@ export class FileChangesEvent {
 
             // For deleted also return true when deleted folder is parent of target path
             if (change.type === FileChangeType.DELETED) {
-                return resource.isEqualOrParent(change.resource);
+                return change.resource.isEqualOrParent(resource);
             }
 
-            return resource.toString() === change.resource.toString();
+            return change.resource.toString() === resource.toString();
         });
     }
 
@@ -200,11 +202,10 @@ export interface BaseStat {
     etag?: string;
 }
 export namespace BaseStat {
-    export function is(arg: Object | undefined): arg is BaseStat {
-        return !!arg && typeof arg === 'object'
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            && ('resource' in arg && <any>arg['resource'] instanceof URI)
-            && ('name' in arg && typeof arg['name'] === 'string');
+    export function is(arg: unknown): arg is BaseStat {
+        return isObject<BaseStat>(arg)
+            && arg.resource instanceof URI
+            && typeof arg.name === 'string';
     }
 }
 
@@ -236,16 +237,22 @@ export interface FileStat extends BaseStat {
     isSymbolicLink: boolean;
 
     /**
+     * The resource is read only.
+     */
+    isReadonly: boolean;
+
+    /**
      * The children of the file stat or undefined if none.
      */
     children?: FileStat[];
 }
 export namespace FileStat {
-    export function is(arg: Object | undefined): arg is FileStat {
-        return BaseStat.is(arg) &&
-            ('isFile' in arg && typeof arg['isFile'] === 'boolean') &&
-            ('isDirectory' in arg && typeof arg['isDirectory'] === 'boolean') &&
-            ('isSymbolicLink' in arg && typeof arg['isSymbolicLink'] === 'boolean');
+    export function is(arg: unknown): arg is FileStat {
+        const fileStat = arg as FileStat;
+        return BaseStat.is(fileStat) &&
+            ('isFile' in fileStat && typeof fileStat.isFile === 'boolean') &&
+            ('isDirectory' in fileStat && typeof fileStat.isDirectory === 'boolean') &&
+            ('isSymbolicLink' in fileStat && typeof fileStat.isSymbolicLink === 'boolean');
     }
     export function asFileType(stat: FileStat): FileType {
         let res = 0;
@@ -277,6 +284,7 @@ export namespace FileStat {
             isFile: (stat.type & FileType.File) !== 0,
             isDirectory: (stat.type & FileType.Directory) !== 0,
             isSymbolicLink: (stat.type & FileType.SymbolicLink) !== 0,
+            isReadonly: !!stat.permissions && (stat.permissions & FilePermission.Readonly) !== 0,
             mtime: stat.mtime,
             ctime: stat.ctime,
             size: stat.size,
@@ -485,6 +493,14 @@ export enum FileType {
     SymbolicLink = 64
 }
 
+export enum FilePermission {
+
+    /**
+     * File is readonly.
+     */
+    Readonly = 1
+}
+
 export interface Stat {
     type: FileType;
 
@@ -499,6 +515,8 @@ export interface Stat {
     ctime: number;
 
     size: number;
+
+    permissions?: FilePermission;
 }
 
 export interface WatchOptions {
@@ -507,6 +525,7 @@ export interface WatchOptions {
 }
 
 export const enum FileSystemProviderCapabilities {
+    None = 0,
     FileReadWrite = 1 << 1,
     FileOpenReadWriteClose = 1 << 2,
     FileReadStream = 1 << 4,
@@ -698,16 +717,25 @@ export interface FileSystemProvider {
  */
 export interface FileSystemProviderWithAccessCapability extends FileSystemProvider {
     /**
-     * Test if the user has the permission to access the given file in the specified mode.
+     * Tests a user's permissions for the file or directory specified by URI.
      * @param resource The `URI` of the file that should be tested.
-     * @param mode The access mode that should be tested.
+     * @param mode An optional integer that specifies the accessibility checks to be performed.
+     *      Check `FileAccess.Constants` for possible values of mode.
+     *      It is possible to create a mask consisting of the bitwise `OR` of two or more values (e.g. FileAccess.Constants.W_OK | FileAccess.Constants.R_OK).
+     *      If `mode` is not defined, `FileAccess.Constants.F_OK` will be used instead.
      *
      * @returns A promise that resolves if the user has the required permissions, should be rejected otherwise.
      */
     access(resource: URI, mode?: number): Promise<void>;
 
     /**
-     * Derive the platform specific file system path that is represented by the resource.
+     * Returns the path of the given file URI, specific to the backend's operating system.
+     * If the URI is not a file URI, undefined is returned.
+     *
+     * USE WITH CAUTION: You should always prefer URIs to paths if possible, as they are
+     * portable and platform independent. Paths should only be used in cases you directly
+     * interact with the OS, e.g. when running a command on the shell.
+     *
      * @param resource `URI` of the resource to derive the path from.
      *
      * @returns A promise of the corresponding file system path.
@@ -737,6 +765,18 @@ export interface FileSystemProviderWithUpdateCapability extends FileSystemProvid
 
 export function hasUpdateCapability(provider: FileSystemProvider): provider is FileSystemProviderWithUpdateCapability {
     return !!(provider.capabilities & FileSystemProviderCapabilities.Update);
+}
+
+export interface ReadOnlyMessageFileSystemProvider {
+    readOnlyMessage: MarkdownString | undefined;
+    readonly onDidChangeReadOnlyMessage: Event<MarkdownString | undefined>;
+}
+
+export namespace ReadOnlyMessageFileSystemProvider {
+    export function is(arg: unknown): arg is ReadOnlyMessageFileSystemProvider {
+        return isObject<ReadOnlyMessageFileSystemProvider>(arg)
+            && 'readOnlyMessage' in arg;
+    }
 }
 
 /**
@@ -837,7 +877,7 @@ export function hasOpenReadWriteCloseCapability(provider: FileSystemProvider): p
  */
 export interface FileSystemProviderWithFileReadStreamCapability extends FileSystemProvider {
     /**
-     * Read the  contents of the given file as stream.
+     * Read the contents of the given file as stream.
      * @param resource The `URI` of the file.
      *
      * @return The `ReadableStreamEvents` for the readable stream of the given file.
